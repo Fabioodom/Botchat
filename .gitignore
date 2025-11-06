@@ -70,3 +70,6 @@ site/
 
 # Archivos de configuración local
 local_settings.py
+
+credentials.json
+token.pkl
