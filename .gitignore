@@ -72,4 +72,4 @@ site/
 local_settings.py
 
 credentials.json
-token.pkl
+*.pkl
