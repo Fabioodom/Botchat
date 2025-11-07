@@ -1,34 +1,110 @@
-#Preuab Repo
-##
+# backend/db.py
+import sqlite3
+from typing import Optional, Dict
 
-import os, sqlite3
-from pathlib import Path
-
-DB_PATH = os.getenv("DB_PATH", "botcitas.db")
+DB_PATH = "botcitas.db"
 
 def get_connection():
-    p = Path(DB_PATH)
-    if p.parent and not p.parent.exists():
-        p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
 
 def init_db():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS appointments(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL,
-        email TEXT NOT NULL,
-        servicio TEXT NOT NULL,
-        fecha_iso TEXT NOT NULL,
-        hora_iso TEXT NOT NULL,
-        observaciones TEXT,
-        confianza REAL,
-        created_at TEXT DEFAULT (datetime('now'))
+    con = get_connection()
+    cur = con.cursor()
+
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS usuarios (
+        usuario_id TEXT PRIMARY KEY,
+        nombre TEXT,
+        email TEXT,
+        fecha_registro TEXT,
+        preferencias TEXT,
+        token_path TEXT
     )
-    """)
-    conn.commit()
-    conn.close()
+    ''')
+
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS citas (
+        id_cita INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id TEXT,
+        fecha TEXT,
+        hora TEXT,
+        tipo TEXT,
+        descripcion TEXT,
+        recordatorio TEXT,
+        id_evento_google TEXT,
+        creado_en TEXT
+    )
+    ''')
+
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS memoria_chat (
+        id_memoria INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id TEXT,
+        fecha TEXT,
+        mensaje_usuario TEXT,
+        respuesta_bot TEXT,
+        contexto TEXT
+    )
+    ''')
+
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS documentos_pdf (
+        id_doc INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id TEXT,
+        titulo TEXT,
+        fecha_subida TEXT,
+        ruta_archivo TEXT,
+        embedding_path TEXT,
+        resumen TEXT
+    )
+    ''')
+
+    con.commit()
+    con.close()
+
+# ---------- Helpers ----------
+def execute_query(query: str, params: tuple = ()):
+    con = get_connection()
+    cur = con.cursor()
+    cur.execute(query, params)
+    con.commit()
+    lastrowid = cur.lastrowid
+    con.close()
+    return lastrowid
+
+def query_one(query: str, params: tuple = ()):
+    con = get_connection()
+    con.row_factory = sqlite3.Row
+    cur = con.cursor()
+    cur.execute(query, params)
+    row = cur.fetchone()
+    con.close()
+    if row:
+        return dict(row)
+    return None
+
+def query_all(query: str, params: tuple = ()):
+    con = get_connection()
+    con.row_factory = sqlite3.Row
+    cur = con.cursor()
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    con.close()
+    return [dict(r) for r in rows]
+
+# Usuarios
+def get_user_by_email(email: str) -> Optional[Dict]:
+    return query_one("SELECT * FROM usuarios WHERE email = ?", (email,))
+
+def upsert_user_token(usuario_id: str, nombre: str, email: str, token_path: str):
+    """
+    Inserta o actualiza el usuario y deja token_path.
+    """
+    execute_query("""
+        INSERT INTO usuarios (usuario_id, nombre, email, fecha_registro, token_path)
+        VALUES (?, ?, ?, datetime('now'), ?)
+        ON CONFLICT(usuario_id) DO UPDATE SET
+            nombre = excluded.nombre,
+            email = excluded.email,
+            token_path = excluded.token_path
+    """, (usuario_id, nombre, email, token_path))
