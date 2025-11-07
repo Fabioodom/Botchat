@@ -1,134 +1,150 @@
 import os, json
-from datetime import datetime
-from dateutil import parser as dtparse
 import streamlit as st
 from dotenv import load_dotenv, find_dotenv
 
-# Cargar variables .env
-load_dotenv(find_dotenv())
-
-# Backend
 from backend.db import init_db
 from backend.services import add_appointment, list_appointments, delete_appointment
-from backend.llm import chat_with_groq, chat_with_ollama, extract_json_block, build_llm_messages
 from backend.google_calendar import create_event
+from backend.agent_rulebased import (
+    initial_state, prompt_for, parse_and_update, is_complete, final_json
+)
 from models.appointment import Appointment
 
-# Inicializar DB
+st.set_page_config(page_title="Bot de Citas (sin IA)", page_icon="🗓️", layout="wide")
+load_dotenv(find_dotenv())
 init_db()
 
-st.set_page_config(page_title="Bot de Citas (IA + Calendar)", page_icon="🗓️", layout="wide")
+# Estado de conversación
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "state" not in st.session_state:
+    st.session_state.state = initial_state()
+if "saved_last_id" not in st.session_state:
+    st.session_state.saved_last_id = None
 
-# === SIDEBAR ===
 with st.sidebar:
     st.header("⚙️ Configuración")
-    provider = st.radio("Proveedor LLM", ["Ollama (local)", "Groq (cloud)"], index=0)
-    if provider.startswith("Ollama"):
-        model_name = st.text_input("Modelo Ollama", value="llama3.2:1b")
-        api_key = None
-    else:
-        model_name = st.text_input("Modelo Groq", value="llama-3.1-70b-versatile")
-        api_key = st.text_input("GROQ_API_KEY", type="password", value=os.getenv("GROQ_API_KEY", ""))
     autosave = st.toggle("Guardar citas en SQLite", value=True)
     add_to_calendar = st.toggle("Crear evento en Google Calendar", value=True)
     invite_user = st.toggle("Invitar al cliente por email", value=True)
-    if st.button("🧹 Limpiar chat"):
+    if st.button("🧹 Reiniciar flujo"):
         st.session_state.history = []
+        st.session_state.state = initial_state()
+        st.session_state.saved_last_id = None
+        st.rerun()
 
-st.title("🤖 Bot de Citas con IA y Google Calendar")
+st.title("🗓️ Bot de Citas · Modo Entrevista (sin IA)")
 
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-# === FUNCIONES AUXILIARES ===
-def normalize_date(txt):
-    if not txt: return None
-    try:
-        return dtparse.parse(txt, dayfirst=True, fuzzy=True).date().isoformat()
-    except: return None
-
-def normalize_time(txt):
-    if not txt: return None
-    try:
-        return dtparse.parse(txt, fuzzy=True).strftime("%H:%M")
-    except: return None
-
-# === UI PRINCIPAL ===
 left, right = st.columns((7,5), gap="large")
 
 with left:
+    # Mostrar historial
     for m in st.session_state.history:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
 
-    msg = st.chat_input("Escribe tu mensaje…")
-    if msg:
-        st.session_state.history.append({"role":"user","content":msg})
-        with st.chat_message("user"): st.markdown(msg)
+    # Si es la primera vez o tras reinicio, el bot pregunta el primer dato
+    if not st.session_state.history:
+        first_q = prompt_for(st.session_state.state["expected"])
+        st.session_state.history.append({"role":"assistant","content":first_q})
+        with st.chat_message("assistant"): st.markdown(first_q)
 
-        llm_messages = build_llm_messages(st.session_state.history[-12:])
-        with st.spinner("Pensando…"):
-            try:
-                if provider.startswith("Ollama"):
-                    answer = chat_with_ollama(llm_messages, model_name)
-                else:
-                    answer = chat_with_groq(llm_messages, model_name, api_key)
-            except Exception as e:
-                answer = f"❌ Error al contactar con el modelo: {e}"
+    # Input usuario
+    user_msg = st.chat_input("Escribe tu respuesta…")
+    if user_msg is not None and user_msg != "":
+        # pinta turno user
+        st.session_state.history.append({"role":"user","content":user_msg})
+        with st.chat_message("user"): st.markdown(user_msg)
 
-        with st.chat_message("assistant"): st.markdown(answer)
-        st.session_state.history.append({"role":"assistant","content":answer})
+        # procesa y decide siguiente pregunta
+        st.session_state.state = parse_and_update(st.session_state.state, user_msg)
 
-        data = extract_json_block(answer)
-        if data:
-            fecha_iso = data.get("fecha_iso") or normalize_date(data.get("fecha_texto"))
-            hora_iso  = data.get("hora_iso")  or normalize_time(data.get("hora_texto"))
+        if is_complete(st.session_state.state):
+            # mostrar JSON final
+            data = final_json(st.session_state.state)
+            block = "```json\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```"
+            msg = "¡Perfecto! Estos son tus datos de la cita. ¿Está todo correcto?\n\n" + block
+            st.session_state.history.append({"role":"assistant","content":msg})
+            with st.chat_message("assistant"): st.markdown(msg)
 
-            st.subheader("📋 Datos interpretados")
-            col1,col2 = st.columns(2)
-            with col1:
-                st.markdown(f"**Nombre:** {data.get('nombre','—')}")
-                st.markdown(f"**Email:** {data.get('email','—')}")
-                st.markdown(f"**Servicio:** {data.get('servicio','—')}")
-                st.markdown(f"**Observaciones:** {data.get('observaciones','—')}")
-            with col2:
-                st.markdown(f"**Fecha:** {fecha_iso or data.get('fecha_texto','—')}")
-                st.markdown(f"**Hora:** {hora_iso or data.get('hora_texto','—')}")
-                st.markdown(f"**Confianza:** {data.get('confianza','—')}")
-
-            ok = all([data.get("nombre"),data.get("email"),data.get("servicio"),fecha_iso,hora_iso])
-            if ok and autosave:
-                a = Appointment(None,data["nombre"],data["email"],data["servicio"],fecha_iso,hora_iso,
-                                data.get("observaciones") or "",data.get("confianza"))
-                new_id = add_appointment(a)
+            # Guardar y calendar (una sola vez por completitud)
+            if autosave and st.session_state.saved_last_id is None:
+                appt = Appointment(
+                    nombre=data["nombre"],
+                    email=data["email"],
+                    servicio=data["servicio"],
+                    fecha_texto=data["fecha_texto"],
+                    fecha_iso=data["fecha_iso"],
+                    hora_texto=data["hora_texto"],
+                    hora_iso=data["hora_iso"],
+                    observaciones=data["observaciones"],
+                    confianza=data["confianza"],
+                )
+                new_id = add_appointment(appt)
+                st.session_state.saved_last_id = new_id
                 st.success(f"✅ Cita guardada (id={new_id})")
 
                 if add_to_calendar:
                     try:
-                        summary = f"{a.servicio} — {a.nombre}"
-                        description = f"Email: {a.email}\nNotas: {a.observaciones}"
+                        summary = f"{appt.servicio} — {appt.nombre}"
+                        description = f"Email: {appt.email}\nNotas: {appt.observaciones or ''}"
                         created = create_event(
                             summary=summary,
-                            date_iso=a.fecha_iso,
-                            time_hhmm=a.hora_iso,
+                            date_iso=appt.fecha_iso,
+                            time_hhmm=appt.hora_iso,
                             duration_minutes=60,
                             description=description,
-                            attendees_emails=[a.email] if invite_user else None
+                            attendees_emails=[appt.email] if invite_user else None
                         )
-                        st.success(f"📅 Añadida a Google Calendar: [Abrir]({created.get('htmlLink')})")
+                        link = created.get("htmlLink") if isinstance(created, dict) else None
+                        if link:
+                            st.success(f"📅 Añadida a Google Calendar: [Abrir]({link})")
+                        else:
+                            st.info("Evento creado en Calendar.")
                     except Exception as e:
                         st.warning(f"⚠️ No se pudo crear el evento: {e}")
-            else:
-                st.info("Faltan datos clave, el asistente te los pedirá.")
+
+            # Tras completar, puedes reiniciar el flujo automáticamente:
+            # st.session_state.history.append({"role":"assistant","content":"Si deseas crear otra cita, escribe 'nueva'."})
+
+        else:
+            # pregunta siguiente
+            nxt_q = prompt_for(st.session_state.state["expected"])
+            st.session_state.history.append({"role":"assistant","content":nxt_q})
+            with st.chat_message("assistant"): st.markdown(nxt_q)
+
+    # Panel lateral de “datos interpretados”
+    st.subheader("📋 Progreso")
+    s = st.session_state.state
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**Nombre:** {s.get('nombre') or '—'}")
+        st.markdown(f"**Email:** {s.get('email') or '—'}")
+        st.markdown(f"**Servicio:** {s.get('servicio') or '—'}")
+        st.markdown(f"**Observaciones:** {s.get('observaciones') or '—'}")
+    with col2:
+        st.markdown(f"**Fecha (ISO):** {s.get('fecha_iso') or s.get('fecha_texto') or '—'}")
+        st.markdown(f"**Hora (ISO):** {s.get('hora_iso') or s.get('hora_texto') or '—'}")
+        st.markdown(f"**Confianza:** {s.get('confianza')}")
 
 with right:
     st.header("🗓️ Citas guardadas")
     q = st.text_input("Buscar (nombre / servicio)")
     rows = list_appointments(q=q)
-    if not rows: st.info("Sin resultados.")
-    for r in rows:
-        st.markdown("---")
-        st.markdown(f"**{r['id']}** · {r['servicio']} · {r['fecha_iso']} {r['hora_iso']}")
-        st.caption(f"{r['nombre']} — {r['email']}")
-        if st.button("🗑️ Eliminar", key=f"del-{r['id']}"):
-            delete_appointment(r['id'])
-            st.experimental_rerun()
+    if not rows:
+        st.info("Sin resultados.")
+    else:
+        for r in rows:
+            rid = r["id"] if isinstance(r, dict) else getattr(r, "id", None)
+            servicio = r.get("servicio") if isinstance(r, dict) else getattr(r, "servicio", "")
+            fecha_iso = r.get("fecha_iso") if isinstance(r, dict) else getattr(r, "fecha_iso", "")
+            hora_iso = r.get("hora_iso") if isinstance(r, dict) else getattr(r, "hora_iso", "")
+            nombre = r.get("nombre") if isinstance(r, dict) else getattr(r, "nombre", "")
+            email = r.get("email") if isinstance(r, dict) else getattr(r, "email", "")
+
+            st.markdown("---")
+            st.markdown(f"**{rid}** · {servicio} · {fecha_iso} {hora_iso}")
+            st.caption(f"{nombre} — {email}")
+            if st.button("🗑️ Eliminar", key=f"del-{rid}"):
+                delete_appointment(rid)
+                st.rerun()
