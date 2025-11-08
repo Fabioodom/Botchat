@@ -243,24 +243,31 @@ with left:
 
 with right:
     # =========================
+    # =========================
     # Citas guardadas
+    # =========================
     st.header("🗓️ Citas guardadas")
-    q = st.text_input("Buscar (nombre / servicio)")
+    q = st.text_input("Buscar (tipo / descripción)")
     rows = list_appointments(q=q)
+
     if not rows:
         st.info("Sin resultados.")
     else:
         for r in rows:
-            rid = r["id"] if isinstance(r, dict) else getattr(r, "id", None)
-            servicio = r.get("servicio") if isinstance(r, dict) else getattr(r, "servicio", "")
-            fecha_iso = r.get("fecha_iso") if isinstance(r, dict) else getattr(r, "fecha_iso", "")
-            hora_iso = r.get("hora_iso") if isinstance(r, dict) else getattr(r, "hora_iso", "")
-            nombre = r.get("nombre") if isinstance(r, dict) else getattr(r, "nombre", "")
-            email = r.get("email") if isinstance(r, dict) else getattr(r, "email", "")
+            # Extraer campos con nombres reales de la tabla `citas`
+            rid = r.get("id_cita")
+            tipo = r.get("tipo", "—")
+            fecha = r.get("fecha", "—")
+            hora = r.get("hora", "—")
+            descripcion = r.get("descripcion", "")
+            usuario_id = r.get("usuario_id", "—")
 
             st.markdown("---")
-            st.markdown(f"**{rid}** · {servicio} · {fecha_iso} {hora_iso}")
-            st.caption(f"{nombre} — {email}")
+            st.markdown(f"**{rid}** · {tipo} · {fecha} {hora}")
+            st.caption(f"Usuario: {usuario_id}")
+            if descripcion:
+                st.text(f"📝 {descripcion}")
+
             if st.button("🗑️ Eliminar", key=f"del-{rid}"):
                 delete_appointment(rid)
                 st.rerun()

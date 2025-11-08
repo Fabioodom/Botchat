@@ -74,3 +74,4 @@ local_settings.py
 
 credentials.json
 *.pkl
+token.json
