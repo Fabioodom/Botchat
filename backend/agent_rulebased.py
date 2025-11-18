@@ -1,87 +1,3 @@
-#llm.py
-
-'''
-
-import os, json
-from typing import List, Dict, Optional
-
-try:
-    from groq import Groq
-except: Groq = None
-
-try:
-    import ollama
-except: ollama = None
-
-SYSTEM_PROMPT = """Eres un asistente de agenda que recopila datos para una CITA.
-Objetivo: pedir de forma amable los datos necesarios y devolver SIEMPRE un bloque JSON al final.
-
-Reglas:
-- Pregunta SOLO por el dato que falte, de uno en uno, con una frase breve y clara.
-- No repitas preguntas ya contestadas; si el usuario aporta varios datos a la vez, intégralos.
-- Si tienes baja seguridad, pide confirmación. No inventes.
-- Español neutro, tono profesional y cercano.
-
-FORMATO OBLIGATORIO al final de CADA respuesta:
-Incluye EXACTAMENTE un bloque de código JSON (y nada más dentro del bloque) con la forma:
-
-```json
-{
-  "nombre": null | "string",
-  "email": null | "string",
-  "servicio": null | "string",
-  "fecha_texto": null | "string",
-  "fecha_iso": null | "YYYY-MM-DD",
-  "hora_texto": null | "string",
-  "hora_iso": null | "HH:MM",
-  "observaciones": null | "string",
-  "confianza": number  // 0.0 a 1.0
-}
-```"""
-
-def extract_json_block(text:str)->Optional[dict]:
-    if not text: return None
-    s=text.rfind("```json"); e=text.rfind("```")
-    if s!=-1 and e!=-1 and e>s:
-        try: return json.loads(text[s+7:e].strip())
-        except: pass
-    try: return json.loads(text)
-    except: return None
-
-def chat_with_groq(messages:List[Dict],model:str,api_key:str)->str:
-    if Groq is None: raise RuntimeError("Instala groq")
-    client=Groq(api_key=api_key or os.getenv("GROQ_API_KEY"))
-    resp=client.chat.completions.create(model=model,messages=messages,temperature=0.3)
-    return resp.choices[0].message.content
-
-def chat_with_ollama(messages:List[Dict],model:str)->str:
-    if ollama and hasattr(ollama,"chat"):
-        resp=ollama.chat(model=model,messages=messages,options={"temperature":0.3})
-        return resp["message"]["content"]
-    import requests
-    r=requests.post("http://localhost:11434/api/chat",
-        json={"model":model,"messages":messages,"stream":False})
-    return r.json()["message"]["content"]
-
-def build_llm_messages(history:List[Dict])->List[Dict]:
-    return [{"role":"system","content":SYSTEM_PROMPT}] + history
-
-'''
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # backend/agent_rulebased.py
 import re
 from datetime import datetime
@@ -93,23 +9,42 @@ def valid_email(s: str) -> bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", (s or "").strip()))
 
 def parse_date_iso(s: Optional[str]) -> Optional[str]:
-    if not s: return None
+    if not s:
+        return None
     s = s.strip()
     for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(s, fmt).date().isoformat()
         except:
             pass
+    # Intento salvaje: dd/mm o dd-mm con año actual
+    m = re.match(r"^(\d{1,2})[/-](\d{1,2})$", s)
+    if m:
+        d, mth = m.groups()
+        try:
+            dt = datetime(datetime.now().year, int(mth), int(d))
+            return dt.date().isoformat()
+        except:
+            return None
     return None
 
 def parse_time_iso(s: Optional[str]) -> Optional[str]:
-    if not s: return None
-    s = s.strip().replace(".", ":")
-    try:
-        t = datetime.strptime(s, "%H:%M").time()
-        return f"{t.hour:02d}:{t.minute:02d}"
-    except:
+    if not s:
         return None
+    s = s.strip()
+    for fmt in ("%H:%M", "%H.%M", "%H"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.strftime("%H:%M")
+        except:
+            pass
+    # Algunas cosas como "a las 5", "5 de la tarde"
+    m = re.search(r"(\d{1,2})", s)
+    if m:
+        h = int(m.group(1))
+        if 0 <= h <= 23:
+            return f"{h:02d}:00"
+    return None
 
 def initial_state() -> Dict:
     return {
@@ -121,58 +56,77 @@ def initial_state() -> Dict:
         "hora_texto": None,
         "hora_iso": None,
         "observaciones": None,
-        "confianza": 1.0,
-        "expected": "nombre",  # campo que toca pedir ahora
     }
 
 def next_expected(state: Dict) -> Optional[str]:
-    for k in ORDER:
-        if not state.get(k):
-            return k
-    # Si ya hay texto pero falta ISO, seguimos esperando confirmaciones implícitas
-    if not state.get("fecha_iso"): return "fecha_texto"
-    if not state.get("hora_iso"):  return "hora_texto"
+    for field in ORDER:
+        if not state.get(field):
+            return field
+    if not state.get("fecha_iso"):
+        return "fecha_texto"
+    if not state.get("hora_iso"):
+        return "hora_texto"
     return None
 
-def prompt_for(field: str) -> str:
-    prompts = {
-        "nombre": "¿Cuál es tu nombre completo?",
-        "email": "¿Cuál es tu email para la confirmación?",
-        "servicio": "¿Para qué servicio quieres la cita?",
-        "fecha_texto": "¿Qué día te viene bien? (dd/mm/aaaa recomendado)",
-        "hora_texto": "¿A qué hora? (HH:MM 24h, por ejemplo 17:30)",
-        "observaciones": "¿Alguna observación adicional? (opcional, puedes dejarlo en blanco)",
-    }
-    return prompts.get(field, "¿Puedes indicarme el dato que falta?")
+def prompt_for(state: Dict) -> str:
+    missing = next_expected(state)
+    if missing == "nombre":
+        return "¿Cómo te llamas?"
+    if missing == "email":
+        return "¿Cuál es tu correo electrónico?"
+    if missing == "servicio":
+        return "¿Qué tipo de servicio necesitas (por ejemplo, corte de pelo, consulta, etc.)?"
+    if missing == "fecha_texto":
+        return "¿Para qué día quieres la cita? (por ejemplo, 25/12/2025)"
+    if missing == "hora_texto":
+        return "¿A qué hora te viene bien? (por ejemplo, 16:30)"
+    if missing == "observaciones":
+        return "¿Quieres añadir alguna observación o preferencia adicional? (si no, dime 'no')"
+    return "Creo que ya tengo todos los datos, pero dime si quieres revisar algo."
 
 def parse_and_update(state: Dict, user_text: str) -> Dict:
-    field = state.get("expected") or next_expected(state) or "observaciones"
-    txt = (user_text or "").strip()
+    user_text = (user_text or "").strip()
+    new_state = dict(state)
+    missing = next_expected(state)
 
-    if field == "nombre":
-        state["nombre"] = txt if txt else None
+    if missing == "nombre":
+        new_state["nombre"] = user_text or state.get("nombre")
+        return new_state
 
-    elif field == "email":
-        state["email"] = txt if valid_email(txt) else None
+    if missing == "email":
+        if valid_email(user_text):
+            new_state["email"] = user_text
+        else:
+            # Si no es válido, no lo guardamos
+            pass
+        return new_state
 
-    elif field == "servicio":
-        state["servicio"] = txt if txt else None
+    if missing == "servicio":
+        new_state["servicio"] = user_text or state.get("servicio")
+        return new_state
 
-    elif field == "fecha_texto":
-        state["fecha_texto"] = txt if txt else None
-        state["fecha_iso"] = parse_date_iso(txt)
+    if missing == "fecha_texto":
+        new_state["fecha_texto"] = user_text
+        iso = parse_date_iso(user_text)
+        if iso:
+            new_state["fecha_iso"] = iso
+        return new_state
 
-    elif field == "hora_texto":
-        state["hora_texto"] = txt if txt else None
-        state["hora_iso"] = parse_time_iso(txt)
+    if missing == "hora_texto":
+        new_state["hora_texto"] = user_text
+        iso = parse_time_iso(user_text)
+        if iso:
+            new_state["hora_iso"] = iso
+        return new_state
 
-    elif field == "observaciones":
-        state["observaciones"] = txt if txt else None
+    if missing == "observaciones":
+        if user_text.lower() in ("no", "ninguna", "no tengo", "ninguna observación"):
+            new_state["observaciones"] = ""
+        else:
+            new_state["observaciones"] = user_text
+        return new_state
 
-    # Ajusta el siguiente esperado según lo que falte
-    nxt = next_expected(state)
-    state["expected"] = nxt if nxt else None
-    return state
+    return new_state
 
 def is_complete(state: Dict) -> bool:
     return all(state.get(k) for k in ["nombre","email","servicio","fecha_iso","hora_iso"])
