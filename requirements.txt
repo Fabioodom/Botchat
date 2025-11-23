@@ -6,3 +6,8 @@ google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
 pytz
+langchain
+langchain_ollama
+dotenv
+dateparser
+langchain_community
