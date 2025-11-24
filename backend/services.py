@@ -20,7 +20,7 @@ def list_appointments(q: Optional[str] = None, limit: int = 50) -> List[Dict[str
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     sql = "SELECT * FROM citas"
-    params: List[Any] = []
+    params = []
     if q:
         sql += " WHERE tipo LIKE ? OR descripcion LIKE ?"
         wild = f"%{q}%"
