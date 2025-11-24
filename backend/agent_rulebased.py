@@ -91,7 +91,7 @@ def extract_json_block(text: str):
     
     return None
 
-
+"""
 # backend/agent_rulebased.py
 import re
 from datetime import datetime
@@ -199,3 +199,4 @@ def final_json(state: Dict) -> Dict:
         "observaciones": state.get("observaciones"),
         "confianza": 1.0,
     }
+"""

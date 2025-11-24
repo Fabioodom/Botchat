@@ -14,7 +14,7 @@ from backend.services import add_appointment, list_appointments, delete_appointm
 from backend.google_calendar import create_event
 from models.appointment import Appointment
 from backend.chat_manager import ChatManagerDB
-from backend.agent_rulebased import extract_json_block  # <-- solo necesitamos esto
+from backend.agent_rulebased import extract_json_block  
 
 # Google Auth
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -152,7 +152,6 @@ with st.sidebar:
         st.rerun()
 
 
-
 # ============================
 # CREAR CHAT MANAGER SI FALTA
 # ============================
@@ -192,7 +191,6 @@ with left:
         with st.chat_message("assistant"):
             st.markdown(response)
 
-        # Extraer JSON final del modelo
         data = extract_json_block(response)
 
         if data:
@@ -254,17 +252,35 @@ with left:
             # --------------------------------------------------------
             elif action == "consult":
 
-                filtro = data.get("filtro", "")
-                st.info(f"🔍 Buscando citas relacionadas con: **{filtro}**")
+                st.info("📅 Consultando todas tus citas futuras en Google Calendar…")
 
-                resultados = list_appointments(q=filtro)
+                from backend.google_calendar import get_future_events
+                eventos = get_future_events()
 
-                if not resultados:
-                    st.warning("❌ No se encontraron citas relacionadas.")
+                if not eventos:
+                    st.warning("❌ No tienes citas futuras en tu calendario.")
                 else:
-                    st.success(f"📋 Encontradas {len(resultados)} cita(s):")
-                    for r in resultados:
-                        st.markdown(f"- **{r['tipo']}** → {r['fecha']} {r['hora']}")
+                    st.success(f"📋 Encontradas {len(eventos)} cita(s):")
+
+                    for e in eventos:
+                        start_raw = e["start"].get("dateTime") or e["start"].get("date")
+
+                        if not start_raw:
+                            start_fmt = "Fecha desconocida"
+                        else:
+                            try:
+                                
+                                if "dateTime" in e["start"]:
+                                    start_fmt = dtparse.parse(start_raw).strftime("%Y-%m-%d %H:%M")
+                                else:
+                                    
+                                    start_fmt = dtparse.parse(start_raw).strftime("%Y-%m-%d")
+                            except Exception:
+                                start_fmt = "Fecha inválida"
+
+                        st.markdown(f"- **{e['summary']}** → {start_fmt}")
+
+
 
             # --------------------------------------------------------
             # 3) CANCELAR CITA
@@ -302,7 +318,6 @@ with left:
                 else:
                     cita = resultados[0]
 
-                    # Actualizamos en la BD
                     delete_appointment(cita["id_cita"])
 
                     appt = Appointment(

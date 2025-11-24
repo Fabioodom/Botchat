@@ -4,6 +4,7 @@ from langchain_ollama import OllamaLLM
 import os
 import dateparser
 from datetime import datetime
+import re
 
 
 class ChatManagerDB:
@@ -21,15 +22,14 @@ class ChatManagerDB:
         self.api_key = api_key
         self.model_name = model_name or "llama3.2:1b"
 
-        # PROMPT CORRECTO Y ESTRICTO
         self.prompt_template = ChatPromptTemplate.from_messages([
             (
             "system",
             "Eres un asistente especializado en gestionar citas médicas. "
-            "Puedes: crear, consultar, modificar y cancelar citas.\n\n"
+            "Cada mensaje del usuario debe producir UNA ÚNICA acción.\n\n"
 
             "========================================================\n"
-            "🎯 ACCIONES QUE PUEDES REALIZAR\n"
+            "🎯 ACCIONES DISPONIBLES\n"
             "========================================================\n"
             "1) CREAR cita\n"
             "2) CONSULTAR citas del usuario\n"
@@ -37,30 +37,25 @@ class ChatManagerDB:
             "4) CANCELAR una cita\n\n"
 
             "========================================================\n"
-            "📌 1. CREAR CITA (lógica anterior)\n"
+            "📌 VARIABLES DEL SISTEMA QUE PUEDES RECIBIR\n"
             "========================================================\n"
-            "Debes obtener estos campos:\n"
-            "- nombre\n- email\n- servicio\n- fecha_iso\n- hora_iso\n- observaciones\n\n"
-
-            "⚠️ Reglas importantes:\n"
-            "1. Si el sistema añade una línea como:\n"
+            "El sistema puede añadir líneas como:\n"
             "[interpreta fecha=YYYY-MM-DD hora=HH:MM]\n"
-            "→ DEBES usar esos valores directamente.\n\n"
-
-            "2. Si el sistema añade:\n"
             "[email_usuario_logueado=EMAIL]\n"
-            "→ Usa ese email si el usuario no da uno.\n\n"
+            "[nombre_usuario_logueado=NOMBRE]\n\n"
+            "Reglas:\n"
+            "✔️ Debes usar esos valores directamente\n"
+            "✔️ NO los muestres al usuario\n"
+            "✔️ Si hay email_usuario_logueado, úsalo siempre\n"
+            "✔️ Si hay nombre_usuario_logueado, úsalo siempre\n\n"
 
-            "3. Si el sistema añade:\n"
-            "[nombre_usuario_logueado=NOMBRE]\n"
-            "→ Usa ese nombre automáticamente.\n\n"
-
-            "4. Pregunta solo por los datos que falten.\n"
-            "5. NO muestres al usuario las líneas del sistema.\n"
-            "6. Cuando el usuario diga 'sí', 'vale', 'correcto', genera el JSON final.\n"
-            "7. Tu respuesta debe ser breve.\n\n"
-
-            "Formato JSON final para CREAR cita:\n"
+            "========================================================\n"
+            "📌 1. CREAR CITA\n"
+            "========================================================\n"
+            "Debes recolectar:\n"
+            "- nombre\n- email\n- servicio\n- fecha_iso\n- hora_iso\n- observaciones\n\n"
+            "Preguntar SOLO por lo que falte. Respuestas breves.\n\n"
+            "Formato JSON final al crear:\n"
             "```json\n"
             "{{\"action\":\"create\",\"nombre\":\"...\",\"email\":\"...\",\"servicio\":\"...\","
             "\"fecha_iso\":\"YYYY-MM-DD\",\"hora_iso\":\"HH:MM\",\"observaciones\":\"\",\"confianza\":0.95}}\n"
@@ -69,43 +64,50 @@ class ChatManagerDB:
             "========================================================\n"
             "📌 2. CONSULTAR CITAS\n"
             "========================================================\n"
-            "Si el usuario pregunta por sus citas (ej: 'qué citas tengo', 'mis citas de esta semana'), "
-            "NO crees una cita nueva.\n\n"
-
-            "Debes responder con un JSON de acción:\n"
+            "Cuando el usuario pregunte cosas como:\n"
+            "- \"¿Qué citas tengo?\"\n"
+            "- \"Mis citas del viernes\"\n"
+            "- \"Qué tengo programado\"\n\n"
+            "SIEMPRE devuelve:\n"
             "```json\n"
-            "{{\"action\":\"consult\",\"filtro\":\"texto original del usuario\"}}\n"
-            "```\n\n"
+            "{{\"action\":\"consult\",\"filtro\":\"<email_usuario_logueado>\"}}\n"
+            "```\n"
+            "Nunca uses el texto original como filtro. SOLO el email.\n\n"
 
             "========================================================\n"
             "📌 3. MODIFICAR CITA\n"
             "========================================================\n"
-            "Cuando el usuario diga algo como: 'cambia mi cita del martes a las 12', "
-            "DEBES interpretar la fecha/hora y generar:\n\n"
-
+            "Ejemplos:\n"
+            "- \"Cambia mi cita del lunes a las 12\"\n"
+            "- \"Mueve mi dentista al jueves\"\n\n"
+            "Responde con:\n"
             "```json\n"
-            "{{\"action\":\"modify\",\"nueva_fecha\":\"YYYY-MM-DD\",\"nueva_hora\":\"HH:MM\",\"filtro\":\"lo que dijo el usuario\"}}\n"
-            "```\n\n"
+            "{{\"action\":\"modify\",\"nueva_fecha\":\"YYYY-MM-DD\",\"nueva_hora\":\"HH:MM\","
+            "\"filtro\":\"<email_usuario_logueado>\"}}\n"
+            "```\n"
 
             "========================================================\n"
             "📌 4. CANCELAR CITA\n"
             "========================================================\n"
-            "Cuando el usuario diga: 'elimina mi cita', 'cancela la del dentista', 'borra mi cita del viernes', "
-            "DEBES generar:\n\n"
-
+            "Ejemplos:\n"
+            "- \"Cancela mi cita del dentista\"\n"
+            "- \"Elimina mi cita de mañana\"\n\n"
+            "Responde con:\n"
             "```json\n"
-            "{{\"action\":\"cancel\",\"filtro\":\"texto original del usuario\"}}\n"
-            "```\n\n"
+            "{{\"action\":\"cancel\",\"filtro\":\"<email_usuario_logueado>\"}}\n"
+            "```\n"
 
             "========================================================\n"
-            "🏁 REGLA FINAL\n"
+            "🏁 REGLA FINAL OBLIGATORIA\n"
             "========================================================\n"
-            "Tu respuesta SIEMPRE debe terminar con un bloque JSON válido. "
-            "Nada más fuera del bloque JSON aparte del texto normal."
-        ),
-            MessagesPlaceholder(variable_name="chat_history"),
+            "Tu respuesta SIEMPRE debe terminar con UN SOLO bloque JSON válido.\n"
+            "No muestres nada más fuera de ese JSON.\n"
+            "No dupliques acciones.\n"
+            "No mezcles con interacciones previas.\n"
+            ),
             ("human", "{input}")
         ])
+
 
         # MODELO
         if self.provider == "ollama":
@@ -140,6 +142,20 @@ class ChatManagerDB:
 
     def preprocess_input(self, text: str) -> str:
         now = datetime.now()
+
+        # 1) Primero detectamos formato dd-mm-yyyy
+        match = re.search(r'(\d{2})-(\d{2})-(\d{4})', text)
+        if match:
+            d, m, y = match.groups()
+            fecha = f"{y}-{m}-{d}" 
+
+            # detectar hora si existe
+            hour_match = re.search(r'(\d{1,2}:\d{2})', text)
+            hora = hour_match.group(1) if hour_match else "09:00"
+
+            return text + f"\n[interpreta fecha={fecha} hora={hora}]"
+
+        # 2) Si no coincide, usar dateparser normal
         parsed = dateparser.parse(
             text,
             languages=["es"],
@@ -149,6 +165,7 @@ class ChatManagerDB:
                 "PREFER_DAY_OF_MONTH": "current"
             }
         )
+
         if parsed:
             fecha = parsed.strftime("%Y-%m-%d")
             hora = parsed.strftime("%H:%M")
@@ -158,39 +175,26 @@ class ChatManagerDB:
 
     # ---------------- INTERACCIÓN -----------------
 
-    def ask(self, user_input: str) -> str:
+    def ask(self, user_input: str):
         processed = self.preprocess_input(user_input)
 
-        # email del usuario de BD
+        # AÑADIR email y nombre del usuario
         user_row = get_user_by_email(os.getenv("CURRENT_USER_EMAIL", ""))
         
         if user_row and user_row["email"]:
             processed += f"\n[email_usuario_logueado={user_row['email']}]"
-        
+            
         if user_row and user_row.get("nombre"):
             processed += f"\n[nombre_usuario_logueado={user_row['nombre']}]"
 
-        # historial
-        history = self.get_memory()
+        prompt = self.prompt_template.format_prompt(chat_history=[], input=processed)
 
-        # construir prompt
-        prompt = self.prompt_template.format_prompt(
-            chat_history=history,
-            input=processed
-        )
+        bot_resp = self.llm.invoke(prompt.to_string())
 
-        # responder
-        try:
-            bot_resp = self.llm.invoke(prompt.to_string())
-        except Exception as e:
-            bot_resp = f"⚠️ Error con el modelo: {e}"
-
-        # guardar
         self.save_memory(user_input, bot_resp)
 
         return bot_resp
 
-    # reset
     def reset_memory(self):
         execute_query(
             "DELETE FROM memoria_chat WHERE usuario_id = ?",
