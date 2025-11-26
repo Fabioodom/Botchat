@@ -158,4 +158,8 @@ def update_appointment(usuario_id: str, id_cita: int, nueva_fecha: str, nueva_ho
 
 def delete_appointment_by_id(id_cita: int):
     """Elimina una cita por ID."""
+<<<<<<< HEAD
     execute_query("DELETE FROM citas WHERE id_cita = ?", (id_cita,))
+=======
+    execute_query("DELETE FROM citas WHERE id_cita = ?", (id_cita,))
+>>>>>>> 35d290fc44711ed1c009485541d521f614faa8bd

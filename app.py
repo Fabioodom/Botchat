@@ -14,7 +14,11 @@ from backend.services import add_appointment, list_appointments, delete_appointm
 from backend.google_calendar import create_event
 from models.appointment import Appointment
 from backend.chat_manager import ChatManagerDB
+<<<<<<< HEAD
 from backend.agent_rulebased import extract_json_block  # <-- solo necesitamos esto
+=======
+from backend.agent_rulebased import extract_json_block  
+>>>>>>> 35d290fc44711ed1c009485541d521f614faa8bd
 
 # Google Auth
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -152,7 +156,10 @@ with st.sidebar:
         st.rerun()
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 35d290fc44711ed1c009485541d521f614faa8bd
 # ============================
 # CREAR CHAT MANAGER SI FALTA
 # ============================
@@ -186,6 +193,7 @@ with left:
     if user_msg and chat_manager:
         with st.chat_message("user"):
             st.markdown(user_msg)
+<<<<<<< HEAD
 
         response = chat_manager.ask(user_msg)
 
@@ -265,6 +273,104 @@ with left:
                     st.success(f"📋 Encontradas {len(resultados)} cita(s):")
                     for r in resultados:
                         st.markdown(f"- **{r['tipo']}** → {r['fecha']} {r['hora']}")
+=======
+
+        response = chat_manager.ask(user_msg)
+
+        with st.chat_message("assistant"):
+            st.markdown(response)
+
+        data = extract_json_block(response)
+
+        if data:
+
+            action = data.get("action", "create").lower()
+
+            # --------------------------------------------------------
+            # 1) CREAR CITA
+            # --------------------------------------------------------
+            if action == "create":
+
+                nombre = data.get("nombre")
+                email = data.get("email")
+                servicio = data.get("servicio")
+                fecha_iso = data.get("fecha_iso")
+                hora_iso = data.get("hora_iso")
+                observaciones = data.get("observaciones", "")
+
+                if all([nombre, email, servicio, fecha_iso, hora_iso]):
+
+                    appt = Appointment(
+                        nombre=nombre,
+                        email=email,
+                        servicio=servicio,
+                        fecha_texto=data.get("fecha_texto"),
+                        fecha_iso=fecha_iso,
+                        hora_texto=data.get("hora_texto"),
+                        hora_iso=hora_iso,
+                        observaciones=observaciones,
+                        confianza=data.get("confianza", 1.0),
+                    )
+
+                    new_id = add_appointment(appt)
+                    st.success(f"✅ Cita guardada (ID={new_id})")
+
+                    # Añadir a Google Calendar
+                    if add_to_calendar:
+                        try:
+                            summary = f"{servicio} — {nombre}"
+                            desc = f"Email: {email}\nNotas: {observaciones}"
+
+                            created = create_event(
+                                summary=summary,
+                                date_iso=fecha_iso,
+                                time_hhmm=hora_iso,
+                                duration_minutes=60,
+                                description=desc,
+                                attendees_emails=[email] if invite_user else None,
+                            )
+
+                            link = created.get("htmlLink") if isinstance(created, dict) else None
+                            if link:
+                                st.success(f"📅 Evento creado: [Abrir]({link})")
+                        except Exception as e:
+                            st.warning(f"⚠️ No se pudo crear evento: {e}")
+
+            # --------------------------------------------------------
+            # 2) CONSULTAR CITAS
+            # --------------------------------------------------------
+            elif action == "consult":
+
+                st.info("📅 Consultando todas tus citas futuras en Google Calendar…")
+
+                from backend.google_calendar import get_future_events
+                eventos = get_future_events()
+
+                if not eventos:
+                    st.warning("❌ No tienes citas futuras en tu calendario.")
+                else:
+                    st.success(f"📋 Encontradas {len(eventos)} cita(s):")
+
+                    for e in eventos:
+                        start_raw = e["start"].get("dateTime") or e["start"].get("date")
+
+                        if not start_raw:
+                            start_fmt = "Fecha desconocida"
+                        else:
+                            try:
+                                
+                                if "dateTime" in e["start"]:
+                                    start_fmt = dtparse.parse(start_raw).strftime("%Y-%m-%d %H:%M")
+                                else:
+                                    
+                                    start_fmt = dtparse.parse(start_raw).strftime("%Y-%m-%d")
+                            except Exception:
+                                start_fmt = "Fecha inválida"
+
+                        st.markdown(f"- **{e['summary']}** → {start_fmt}")
+
+
+>>>>>>> 35d290fc44711ed1c009485541d521f614faa8bd
 
             # --------------------------------------------------------
             # 3) CANCELAR CITA
@@ -302,7 +408,10 @@ with left:
                 else:
                     cita = resultados[0]
 
+<<<<<<< HEAD
                     # Actualizamos en la BD
+=======
+>>>>>>> 35d290fc44711ed1c009485541d521f614faa8bd
                     delete_appointment(cita["id_cita"])
 
                     appt = Appointment(
@@ -355,4 +464,8 @@ with right:
         except Exception as e:
             st.warning(f"No se pudo cargar calendario: {e}")
     else:
+<<<<<<< HEAD
         st.info("Inicia sesión para ver tu calendario.")
+=======
+        st.info("Inicia sesión para ver tu calendario.")
+>>>>>>> 35d290fc44711ed1c009485541d521f614faa8bd
