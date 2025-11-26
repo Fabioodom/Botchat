@@ -64,11 +64,6 @@ def create_event(summary: str, date_iso: str, time_hhmm: str,
     }
 
     if attendees_emails:
-<<<<<<< HEAD
-        event["attendees"]=[{"email":e} for e in attendees_emails]
-    cal_id=os.getenv("GOOGLE_CALENDAR_ID","primary")
-    return service.events().insert(calendarId=cal_id,body=event,sendUpdates="all").execute()
-=======
         event["attendees"] = [{"email": e} for e in attendees_emails]
 
     cal_id = os.getenv("GOOGLE_CALENDAR_ID", "primary")
@@ -142,5 +137,3 @@ def delete_event(event_id: str) -> bool:
 
     return True
 
-
->>>>>>> 35d290fc44711ed1c009485541d521f614faa8bd
