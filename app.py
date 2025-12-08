@@ -4,12 +4,11 @@ from datetime import datetime
 from dateutil import parser as dtparse
 import streamlit as st
 from dotenv import load_dotenv, find_dotenv
-#Librerías para manejo de PDF
-
 
 # Backend (tus módulos)
 from backend.db import init_db, get_user_by_email, upsert_user_token
-from backend.services import add_appointment, list_appointments, extract_text_from_pdf_bytes, delete_appointment
+from backend.services import add_appointment, list_appointments, delete_appointment
+from backend.google_calendar import create_event  # debe aceptar token_path (te expliqué antes)
 from models.appointment import Appointment
 from backend.google_calendar import create_event
 from backend.agent_rulebased import (
@@ -67,8 +66,6 @@ def normalize_time(txt):
     except:
         return None
 
-
-
 # -----------------------
 # SIDEBAR: Configuración y Login
 # -----------------------
@@ -77,26 +74,6 @@ with st.sidebar:
 
     # --- Autenticación con Google ---
     st.subheader("🔑 Autenticación con Google")
-
-    uploaded_pdf = st.file_uploader("Sube un PDF (opcional)", type=["pdf"])
-
-    if uploaded_pdf is not None:
-        # Leemos el archivo en bytes
-        pdf_bytes = uploaded_pdf.read()
-
-        # Llamamos al servicio de backend
-        pdf_text = extract_text_from_pdf_bytes(pdf_bytes)
-        
-        
-
-        # Guardamos el texto en sesión para usarlo en cualquier parte de la app
-        st.session_state.pdf_text = pdf_text
-
-        st.success("✅ PDF cargado y leído correctamente")
-    
-
-        
-
 
     # Si ya hay usuario cargado, intentar recuperar token desde DB
     if "user_email" in st.session_state and "creds" not in st.session_state:
@@ -318,12 +295,3 @@ with right:
             st.warning(f"⚠️ No se pudo mostrar el calendario: {e}")
     else:
         st.info("Inicia sesión con Google para ver tu calendario personal.")
-
-        st.markdown("---")
-        st.header("📄 Contexto desde PDF")
-        pdf_text = st.session_state.get("pdf_text", "")   # 👈 lo traes de sesión
-
-        if pdf_text:
-            st.text_area("Texto del PDF", pdf_text[:5000], height=200)
-        else:
-            st.info("No se ha cargado ningún PDF todavía.")

@@ -2,7 +2,7 @@ import sqlite3
 from typing import Optional, List, Dict, Any
 from .db import get_connection
 from models.appointment import Appointment
-from PyPDF2 import PdfReader
+#argl
 
 def add_appointment(a: Appointment) -> int:
     conn = get_connection()
@@ -38,21 +38,3 @@ def delete_appointment(id_: int):
     cur.execute("DELETE FROM citas WHERE id_cita=?", (id_,))
     conn.commit()
     conn.close()
-
-
-def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
-    """
-    Recibe el contenido de un PDF en bytes y devuelve el texto extraído.
-    Esta función NO depende de Streamlit.
-    """
-    import io
-
-    pdf_file = io.BytesIO(pdf_bytes)
-    reader = PdfReader(pdf_file)
-
-    text_parts = []
-    for page in reader.pages:
-        page_text = page.extract_text() or ""
-        text_parts.append(page_text)
-
-    return "\n".join(text_parts)
