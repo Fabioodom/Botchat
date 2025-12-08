@@ -13,6 +13,9 @@ import streamlit as st
 # Asumimos que esta función está en tu backend (agent_rulebased.py)
 from backend.agent_rulebased import extract_json_block
 
+#============================================================
+#Impl rama
+
 
 class ChatManagerDB:
     """
