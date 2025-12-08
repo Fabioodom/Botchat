@@ -7,10 +7,12 @@ DB_PATH = "botcitas.db"
 def get_connection():
     return sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
 
+
 def init_db():
     con = get_connection()
     cur = con.cursor()
 
+    # Tabla de usuarios
     cur.execute('''
     CREATE TABLE IF NOT EXISTS usuarios (
         usuario_id TEXT PRIMARY KEY,
@@ -22,6 +24,7 @@ def init_db():
     )
     ''')
 
+    # Tabla de citas médicas
     cur.execute('''
     CREATE TABLE IF NOT EXISTS citas (
         id_cita INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,6 +39,7 @@ def init_db():
     )
     ''')
 
+    # Memoria del chat
     cur.execute('''
     CREATE TABLE IF NOT EXISTS memoria_chat (
         id_memoria INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,6 +51,7 @@ def init_db():
     )
     ''')
 
+    # Documentos subidos (PDF)
     cur.execute('''
     CREATE TABLE IF NOT EXISTS documentos_pdf (
         id_doc INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +67,7 @@ def init_db():
     con.commit()
     con.close()
 
-# ---------- Helpers ----------
+
 def execute_query(query: str, params: tuple = ()):
     con = get_connection()
     cur = con.cursor()
@@ -72,6 +77,7 @@ def execute_query(query: str, params: tuple = ()):
     con.close()
     return lastrowid
 
+
 def query_one(query: str, params: tuple = ()):
     con = get_connection()
     con.row_factory = sqlite3.Row
@@ -79,9 +85,8 @@ def query_one(query: str, params: tuple = ()):
     cur.execute(query, params)
     row = cur.fetchone()
     con.close()
-    if row:
-        return dict(row)
-    return None
+    return dict(row) if row else None
+
 
 def query_all(query: str, params: tuple = ()):
     con = get_connection()
@@ -92,13 +97,14 @@ def query_all(query: str, params: tuple = ()):
     con.close()
     return [dict(r) for r in rows]
 
-# Usuarios
+
 def get_user_by_email(email: str) -> Optional[Dict]:
     return query_one("SELECT * FROM usuarios WHERE email = ?", (email,))
 
+
 def upsert_user_token(usuario_id: str, nombre: str, email: str, token_path: str):
     """
-    Inserta o actualiza el usuario y deja token_path.
+    Inserta o actualiza el usuario y guarda el token de Google OAuth.
     """
     execute_query("""
         INSERT INTO usuarios (usuario_id, nombre, email, fecha_registro, token_path)
@@ -110,28 +116,26 @@ def upsert_user_token(usuario_id: str, nombre: str, email: str, token_path: str)
     """, (usuario_id, nombre, email, token_path))
 
 
-# FUNCIONALIDADES PARA CONSULTAR, MODIFICAR Y ELIMINAR CITAS
-
 def get_user_appointments(usuario_id: str):
-    """Obtiene todas las citas de un usuario."""
+    """Devuelve todas las citas de un usuario ordenadas cronológicamente."""
     return query_all("""
         SELECT * FROM citas 
-        WHERE usuario_id = ? 
+        WHERE usuario_id = ?
         ORDER BY fecha ASC, hora ASC
     """, (usuario_id,))
 
 
 def find_appointment(usuario_id: str, fecha: str = None, tipo: str = None):
     """
-    Encuentra una cita por fecha, tipo o ambos.
-    Devuelve una sola cita o None.
+    Busca una cita por fecha, tipo o ambos.
+    Devuelve una única coincidencia o None.
     """
     if fecha and tipo:
         return query_one("""
             SELECT * FROM citas 
             WHERE usuario_id = ? AND fecha = ? AND tipo = ?
         """, (usuario_id, fecha, tipo))
-    
+
     if fecha:
         return query_one("""
             SELECT * FROM citas 
@@ -157,5 +161,5 @@ def update_appointment(usuario_id: str, id_cita: int, nueva_fecha: str, nueva_ho
 
 
 def delete_appointment_by_id(id_cita: int):
-    """Elimina una cita por ID."""
+    """Elimina una cita por el ID."""
     execute_query("DELETE FROM citas WHERE id_cita = ?", (id_cita,))
