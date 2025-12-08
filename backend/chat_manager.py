@@ -1,7 +1,7 @@
 # chat_manager.py
 from backend.db import execute_query, query_all, get_user_by_email
 # Importaciones para manejar el historial de chat de forma correcta
-from langchain_core.messages import HumanMessage, AIMessage 
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_ollama import OllamaLLM
 import os
@@ -11,7 +11,7 @@ import re
 import json
 import streamlit as st
 # Asumimos que esta función está en tu backend (agent_rulebased.py)
-from backend.agent_rulebased import extract_json_block 
+from backend.agent_rulebased import extract_json_block
 
 
 class ChatManagerDB:
@@ -35,150 +35,174 @@ class ChatManagerDB:
         # =========================================================
         self.prompt_template = ChatPromptTemplate.from_messages([
             (
-            "system",
-            """
-            Eres un asistente especializado en gestionar citas y eventos para el usuario (reuniones, exámenes, entrevistas, médicos, fiestas, etc.). Tu función es:            
-            - Hacer UNA pregunta corta cuando falte información
-            - O devolver UN JSON cuando tengas todos los datos
+                "system",
+                """
+                Eres un asistente especializado en gestionar citas y eventos para el usuario (reuniones, exámenes, entrevistas, médicos, fiestas, etc.). Tu función es:            
+                - Hacer UNA pregunta corta cuando falte información
+                - O devolver UN JSON cuando tengas todos los datos
+               
+                =======================================================================
+                📌 REGLAS ABSOLUTAS
+                =======================================================================
+                1. NUNCA escribas código, ejemplos de programación, ni explicaciones técnicas
+                2. NUNCA menciones "estado_cita_en_progreso" al usuario
+                3. NUNCA hagas menús de opciones
+                4. NUNCA preguntes por datos que ya tienes en el estado
+                5. Tu respuesta SOLO puede ser:
+                   A) Una pregunta corta (sin JSON)
+                   B) Un bloque JSON (sin texto adicional)
+                6. Antes de decidir qué preguntar, SIEMPRE debes leer [estado_cita_en_progreso=...].
+                   Si en ese estado ya existe "servicio", "fecha_iso" o "hora_iso", NO debes volver a preguntar por esos campos.
 
-            =======================================================================
-            📌 REGLAS ABSOLUTAS
-            =======================================================================
-            1. NUNCA escribas código, ejemplos de programación, ni explicaciones técnicas
-            2. NUNCA menciones "estado_cita_en_progreso" al usuario
-            3. NUNCA hagas menús de opciones
-            4. NUNCA preguntes por datos que ya tienes en el estado
-            5. Tu respuesta SOLO puede ser:
-            A) Una pregunta corta (sin JSON)
-            B) Un bloque JSON (sin texto adicional)
-            6. Antes de decidir qué preguntar, SIEMPRE debes leer [estado_cita_en_progreso=...].
-            Si en ese estado ya existe "servicio", "fecha_iso" o "hora_iso", NO debes volver a preguntar por esos campos.
+                =======================================================================
+                📌 CONTEXTO DESDE PDF
+                =======================================================================
+                El usuario puede haber subido un PDF. El texto relevante del PDF se pasa en la variable {{pdf_text}}.
 
-            =======================================================================
-            📌 DETECCIÓN DE ACCIÓN
-            =======================================================================
-            Según las palabras del usuario:
+                ➜ MODO NORMAL (sin PDF)
+                - Si {{pdf_text}} está vacío, ignóralo por completo.
+                - Actúa solo con lo que diga el usuario en el chat y el estado_cita_en_progreso.
 
-            "agendar", "programa", "quiero una cita", "ponme" → action = "create"
-            "qué citas tengo", "ver mis citas", "consultar" → action = "consult"
-            "cancela", "anula", "borra", "elimina" → action = "cancel"
-            "cambia", "modifica", "reprograma", "mueve" → action = "modify"
+                ➜ MODO PDF
+                - Si el usuario dice cosas como:
+                  "usa el pdf", "usar el pdf", "saca los datos del pdf",
+                  "crea la cita con los datos del documento", "del pdf", etc.
+                  ENTONCES:
+                  - Debes LEER el CONTEXTO DEL PDF (entre las marcas de inicio y fin).
+                  - Extraer de ahí NOMBRE, EMAIL, SERVICIO, FECHA y HORA si están presentes.
+                  - Devolver directamente el JSON completo de la cita, sin hacer más preguntas,
+                    siempre que tengas todos los campos necesarios.
 
-            =======================================================================
-            📌 ESTADO ACTUAL
-            =======================================================================
-            Recibirás una línea así:
-            [estado_cita_en_progreso={{"nombre":"...", "email":"...", "servicio":"...", "fecha_iso":"...", "hora_iso":"..."}}]
+                ====== INICIO CONTEXTO PDF ======
+                {{pdf_text}}
+                ====== FIN CONTEXTO PDF ======
 
-            REGLA CRÍTICA:
-            - Si un campo YA tiene valor en estado_cita_en_progreso → NO preguntes por él
-            - Si "servicio" existe → NO preguntes "¿Qué servicio necesitas?"
-            - Si "fecha_iso" existe → NO preguntes "¿Para qué día?"
-            - Si "hora_iso" existe → NO preguntes "¿A qué hora?"
+                =======================================================================
+                📌 DETECCIÓN DE ACCIÓN
+                =======================================================================
+                Según las palabras del usuario:
 
-            =======================================================================
-            📌 CREAR CITA (action = "create")
-            =======================================================================
-            Necesitas: nombre, email, servicio, fecha_iso, hora_iso
+                "agendar", "programa", "quiero una cita", "ponme" → action = "create"
+                "qué citas tengo", "ver mis citas", "consultar" → action = "consult"
+                "cancela", "anula", "borra", "elimina" → action = "cancel"
+                "cambia", "modifica", "reprograma", "mueve" → action = "modify"
 
-            Si TODOS están completos → devuelve SOLO este JSON:
-            {{
-            "action": "create",
-            "nombre": "NOMBRE",
-            "email": "EMAIL",
-            "servicio": "SERVICIO",
-            "fecha_iso": "YYYY-MM-DD",
-            "hora_iso": "HH:MM",
-            "observaciones": "",
-            "confianza": 0.95
-            }}
+                =======================================================================
+                📌 ESTADO ACTUAL
+                =======================================================================
+                Recibirás una línea así:
+                [estado_cita_en_progreso={{"nombre":"...", "email":"...", "servicio":"...", "fecha_iso":"...", "hora_iso":"..."}}]
 
-            Si falta algo → pregunta SOLO por lo que falta:
-            - Falta servicio: "¿Qué tipo de cita o evento necesitas?"
-            - Falta fecha: "¿Para qué día?"
-            - Falta hora: "¿A qué hora?"
+                REGLA CRÍTICA:
+                - Si un campo YA tiene valor en estado_cita_en_progreso → NO preguntes por él
+                - Si "servicio" existe → NO preguntes "¿Qué servicio necesitas?"
+                - Si "fecha_iso" existe → NO preguntes "¿Para qué día?"
+                - Si "hora_iso" existe → NO preguntes "¿A qué hora?"
 
-            =======================================================================
-            📌 CONSULTAR CITAS (action = "consult")
-            =========================================================================
-            Si el usuario pregunta por SUS citas con frases como:
-            - "qué citas tengo"
-            - "ver mis citas"
-            - "mis citas"
-            - "consultar citas"
+                =======================================================================
+                📌 CREAR CITA (action = "create")
+                =======================================================================
+                Necesitas: nombre, email, servicio, fecha_iso, hora_iso
 
-            ENTONCES:
-            - NO hagas preguntas largas
-            - NO pidas más confirmaciones
-            - Simplemente devuelve:
-            {{
-            "action": "consult",
-            "filtro": "EMAIL_USUARIO"
-            }}
+                Si TODOS están completos → devuelve SOLO este JSON:
+                {{
+                  "action": "create",
+                  "nombre": "NOMBRE",
+                  "email": "EMAIL",
+                  "servicio": "SERVICIO",
+                  "fecha_iso": "YYYY-MM-DD",
+                  "hora_iso": "HH:MM",
+                  "observaciones": "",
+                  "confianza": 0.95
+                }}
 
-            donde EMAIL_USUARIO es el email del usuario logueado que recibes en el contexto
-            [email_usuario_logueado=...].
+                Si falta algo → pregunta SOLO por lo que falta:
+                - Falta servicio: "¿Qué tipo de cita o evento necesitas?"
+                - Falta fecha: "¿Para qué día?"
+                - Falta hora: "¿A qué hora?"
 
-            Solo si NO tienes ningún email en estado ni en el contexto, puedes hacer
-            UNA pregunta corta: "¿Cuál es tu email para buscar tus citas?"
+                =======================================================================
+                📌 CONSULTAR CITAS (action = "consult")
+                =========================================================================
+                Si el usuario pregunta por SUS citas con frases como:
+                - "qué citas tengo"
+                - "ver mis citas"
+                - "mis citas"
+                - "consultar citas"
 
-            =======================================================================
-            📌 CANCELAR CITA (action = "cancel")
-            =======================================================================
-            Si el usuario menciona una fecha o servicio, devuelve:
-            {{
-            "action": "cancel",
-            "filtro": "FECHA_O_TEXTO"
-            }}
+                ENTONCES:
+                - NO hagas preguntas largas
+                - NO pidas más confirmaciones
+                - Simplemente devuelve:
+                {{
+                  "action": "consult",
+                  "filtro": "EMAIL_USUARIO"
+                }}
 
-            Si no especifica nada, pregunta: "¿Qué cita deseas cancelar? (indica fecha o servicio)"
+                donde EMAIL_USUARIO es el email del usuario logueado que recibes en el contexto
+                [email_usuario_logueado=...].
 
-            =======================================================================
-            📌 MODIFICAR CITA (action = "modify")
-            =======================================================================
-            Necesitas: filtro (cita a modificar), nueva_fecha, nueva_hora
+                Solo si NO tienes ningún email en estado ni en el contexto, puedes hacer
+                UNA pregunta corta: "¿Cuál es tu email para buscar tus citas?"
 
-            Si el usuario da todo ("Cambia mi cita del 10/12 a las 11:30"), devuelve:
-            {{
-            "action": "modify",
-            "filtro": "10/12/2025",
-            "nueva_fecha": "2025-12-10",
-            "nueva_hora": "11:30"
-            }}
+                =======================================================================
+                📌 CANCELAR CITA (action = "cancel")
+                =======================================================================
+                Si el usuario menciona una fecha o servicio, devuelve:
+                {{
+                  "action": "cancel",
+                  "filtro": "FECHA_O_TEXTO"
+                }}
 
-            Si falta algo, pregunta solo por eso.
+                Si no especifica nada, pregunta: "¿Qué cita deseas cancelar? (indica fecha o servicio)"
 
-            =======================================================================
-            📌 EJEMPLOS CORRECTOS
-            =======================================================================
-            Usuario: "Quiero una reunión con mi jefe"
-            Estado: {{"servicio": "reunión con mi jefe", "fecha_iso": null, "hora_iso": null}}
-            Bot: "¿Para qué día?"
+                =======================================================================
+                📌 MODIFICAR CITA (action = "modify")
+                =======================================================================
+                Necesitas: filtro (cita a modificar), nueva_fecha, nueva_hora
 
-            Usuario: "Mañana"
-            Estado: {{"servicio": "reunión con mi jefe", "fecha_iso": "2025-12-10", "hora_iso": null}}
-            Bot: "¿A qué hora?"
+                Si el usuario da todo ("Cambia mi cita del 10/12 a las 11:30"), devuelve:
+                {{
+                  "action": "modify",
+                  "filtro": "10/12/2025",
+                  "nueva_fecha": "2025-12-10",
+                  "nueva_hora": "11:30"
+                }}
 
-            Usuario: "A las 10"
-            Estado: {{"servicio": "reunión con mi jefe", "fecha_iso": "2025-12-10", "hora_iso": "10:00"}}
-            Bot: [JSON COMPLETO]
+                Si falta algo, pregunta solo por eso.
 
-            Usuario: "Cancela mi cita del 10/12/2025"
-            Bot: {{"action": "cancel", "filtro": "10/12/2025"}}
+                =======================================================================
+                📌 EJEMPLOS CORRECTOS
+                =======================================================================
+                Usuario: "Quiero una reunión con mi jefe"
+                Estado: {{"servicio": "reunión con mi jefe", "fecha_iso": null, "hora_iso": null}}
+                Bot: "¿Para qué día?"
 
-            =======================================================================
-            📌 EJEMPLOS INCORRECTOS (PROHIBIDO)
-            =======================================================================
-            ❌ Usuario: "Quiero una cita de médico"
-            Bot: "¿Qué servicio necesitas?" (YA LO DIJO)
+                Usuario: "Mañana"
+                Estado: {{"servicio": "reunión con mi jefe", "fecha_iso": "2025-12-10", "hora_iso": null}}
+                Bot: "¿A qué hora?"
 
-            ❌ Bot: "Puedes elegir entre: agendar, consultar, cancelar..." (MENÚ)
+                Usuario: "A las 10"
+                Estado: {{"servicio": "reunión con mi jefe", "fecha_iso": "2025-12-10", "hora_iso": "10:00"}}
+                Bot: [JSON COMPLETO]
 
-            ❌ Bot: "Antes de empezar, quiero asegurarme..." (EXPLICACIÓN)
+                Usuario: "Cancela mi cita del 10/12/2025"
+                Bot: {{"action": "cancel", "filtro": "10/12/2025"}}
 
-            ❌ Bot: "¿Quieres que genere el JSON?" (PREGUNTA INNECESARIA)
-            """
+                =======================================================================
+                📌 EJEMPLOS INCORRECTOS (PROHIBIDO)
+                =======================================================================
+                ❌ Usuario: "Quiero una cita de médico"
+                   Bot: "¿Qué servicio necesitas?" (YA LO DIJO)
+
+                ❌ Bot: "Puedes elegir entre: agendar, consultar, cancelar..." (MENÚ)
+
+                ❌ Bot: "Antes de empezar, quiero asegurarme..." (EXPLICACIÓN)
+
+                ❌ Bot: "¿Quieres que genere el JSON?" (PREGUNTA INNECESARIA)
+                """
             ),
+
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}")
         ])
@@ -191,7 +215,7 @@ class ChatManagerDB:
                 temperature=0.2,
                 top_p=0.9
             )
-          
+
         elif self.provider == "groq":
             from groq import Groq
             if not self.api_key:
@@ -234,7 +258,7 @@ class ChatManagerDB:
             "hora_iso": None,
             "observaciones": ""
         }
-        
+
     def reset_memory(self):
         """Limpia el historial de la DB (útil para el botón de Streamlit)."""
         execute_query("DELETE FROM memoria_chat WHERE usuario_id = ?", (self.usuario_id,))
@@ -260,7 +284,7 @@ class ChatManagerDB:
         )
         hist = []
         for r in rows:
-            bot_msg_limpio = self._clean_bot_response(r["respuesta_bot"]) 
+            bot_msg_limpio = self._clean_bot_response(r["respuesta_bot"])
             if bot_msg_limpio:
                 hist.append(HumanMessage(content=r["mensaje_usuario"]))
                 hist.append(AIMessage(content=bot_msg_limpio))
@@ -338,6 +362,10 @@ class ChatManagerDB:
         processed, fecha_iso, hora_iso = self.preprocess_input(user_input)
         texto_usuario_lower = user_input.lower().strip()
 
+        usa_pdf = any(p in texto_usuario_lower for p in [
+            "usar el pdf", "usa el pdf", "según el pdf", "segun el pdf", "del pdf", "del documento"
+        ])
+
         # 2) Inicializar estado
         self.init_conversation_state()
         state = st.session_state.conversation_state
@@ -352,7 +380,7 @@ class ChatManagerDB:
         servicio = None
         servicios_map = {
             "médico de cabecera": ["médico de cabecera", "medico de cabecera", "cabecera"],
-            "médico": ["médico", "medico"],
+            "médico": ["médico", "medico", "doctor"],
             "dermatología": ["dermatólogo", "dermatologia", "dermatologo"],
             "cardiología": ["cardiólogo", "cardiologia", "cardiologo"],
             "fisioterapia": ["fisioterapia", "fisioterapeuta"],
@@ -362,7 +390,8 @@ class ChatManagerDB:
             "reunión": ["reunión", "reunion", "junta"],
             "entrevista": ["entrevista"],
             "examen": ["examen", "prueba", "test"],
-            "fiesta": ["fiesta", "celebración", "celebracion"]
+            "fiesta": ["fiesta", "celebración", "celebracion"],
+            "mecánico": ["mecanico", "mecánico", "taller"]
         }
 
         for servicio_normalizado, patrones in servicios_map.items():
@@ -418,6 +447,13 @@ class ChatManagerDB:
             or "reunión" in texto_usuario_lower
             or "reunion" in texto_usuario_lower
         )
+
+        # 🔁 NUEVO: si ya hay datos de cita en el estado, seguimos en modo "create"
+        tiene_estado_creacion = any(
+            state.get(k) for k in ("servicio", "fecha_iso", "hora_iso", "nombre", "email")
+        )
+        if tiene_estado_creacion and not (quiere_consultar or quiere_cancelar or quiere_modificar):
+            quiere_crear = True
 
         # =====================================================
         # B) CONSULT: "ver mis citas", etc. (SIN LLM)
@@ -574,15 +610,54 @@ class ChatManagerDB:
                 return bot_resp
 
         # =====================================================
+        # F0) NUEVO: si el estado YA está completo para crear, devolvemos JSON
+        #      sin pasar por el LLM (evita bucles de “¿Qué tipo de cita…?”)
+        # =====================================================
+        nombre = state.get("nombre")
+        email = state.get("email")
+        servicio_state = state.get("servicio")
+        fecha_state = state.get("fecha_iso")
+        hora_state = state.get("hora_iso")
+
+        if nombre and email and servicio_state and fecha_state and hora_state:
+            bot_resp = (
+                "```json\n"
+                "{\n"
+                '  "action": "create",\n'
+                f'  "nombre": "{nombre}",\n'
+                f'  "email": "{email}",\n'
+                f'  "servicio": "{servicio_state}",\n'
+                f'  "fecha_iso": "{fecha_state}",\n'
+                f'  "hora_iso": "{hora_state}",\n'
+                f'  "observaciones": "{state.get("observaciones", "")}",\n'
+                '  "confianza": 0.95\n'
+                "}\n"
+                "```"
+            )
+            self.save_memory(user_input, bot_resp)
+            self.reset_conversation_state()
+            return bot_resp
+
+        # =====================================================
         # F) Si no hemos podido determinar nada → usar LLM
         # =====================================================
+
         state_json = json.dumps(state, ensure_ascii=False)
         processed += f"\n[estado_cita_en_progreso={state_json}]"
 
         history = self.get_memory()
+
+        pdf_text = st.session_state.get("pdf_text", "") or ""
+        if usa_pdf:
+            pdf_text = pdf_text[:4000]  # recorte por seguridad
+        else:
+            # Si no ha pedido usar el PDF, no metas el texto para no distraer al modelo
+            pdf_text = ""
+
         prompt = self.prompt_template.format_prompt(
             chat_history=history,
-            input=processed
+            input=processed,
+            pdf_text=pdf_text,
         )
 
         try:
@@ -597,7 +672,7 @@ class ChatManagerDB:
                         if msg.type == "system":
                             role = "system"
                         messages.append({"role": role, "content": msg.content})
-                
+
                 completion = self.groq_client.chat.completions.create(
                     model=self.model_name,
                     messages=messages,

@@ -3,7 +3,11 @@ import sqlite3
 from typing import Optional, List, Dict, Any
 from .db import get_connection, execute_query, query_all, query_one
 from models.appointment import Appointment
-#argl
+#Lector pdf
+from PyPDF2 import PdfReader
+
+
+
 
 def add_appointment(a: Appointment) -> int:
     conn = get_connection()
@@ -112,3 +116,21 @@ def update_appointment(usuario_id: str, id_cita: int, nueva_fecha: str, nueva_ho
         SET fecha = ?, hora = ?
         WHERE usuario_id = ? AND id_cita = ?
     """, (nueva_fecha, nueva_hora, usuario_id, id_cita))
+
+def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
+    """
+    Recibe el contenido de un PDF en bytes y devuelve el texto extraído.
+    Esta función NO depende de Streamlit.
+    """
+    import io
+
+    pdf_file = io.BytesIO(pdf_bytes)
+    reader = PdfReader(pdf_file)
+
+    text_parts = []
+    for page in reader.pages:
+        page_text = page.extract_text() or ""
+        text_parts.append(page_text)
+
+    return "\n".join(text_parts)
+
