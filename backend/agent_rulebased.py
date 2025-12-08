@@ -69,25 +69,33 @@ def build_llm_messages(history:List[Dict])->List[Dict]:
 '''
 
 import re, json
-def extract_json_block(text: str):    
-    """Buscamos un bloque de texto JSON y lo convertimos a diccionario para acceder facilmente por clave/valor
-       Si no encuentra ningun JSON que sea valido devolvera un None
-    """
+# backend/agent_rulebased.py
 
-    if not text:
-        return None
+from typing import Optional, Dict
+
+def extract_json_block(text: str) -> Optional[Dict]:
+    """
+    Extrae el primer bloque JSON válido de un texto.
+    Soporta:
+    - ```json { ... } ```
+    - { ... }
+    """
     
-    match = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', text)
-    if not match:
-        match = re.search(r'(\{[\s\S]*?\})', text)
+    # Intentar extraer bloque con ```json
+    match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(1))
-        except Exception:
-            try:
-                return json.load(match.group(0))
-            except Exception:
-                return None
+        except json.JSONDecodeError:
+            pass
+    
+    # Intentar extraer JSON directo
+    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
     
     return None
 
