@@ -128,7 +128,6 @@ def update_event(event_id: str,
     tz_obj = pytz.timezone(tz)
 
     # 3) Calcular la duración del evento
-    #    Manejar tanto dateTime como date (all-day)
     start_info = event["start"]
     end_info = event["end"]
 
@@ -142,11 +141,9 @@ def update_event(event_id: str,
         old_end = datetime.fromisoformat(end_info["date"])
         duration = old_end - old_start
     else:
-        # Fallback: 60 minutos
         duration = timedelta(minutes=60)
 
     # 4) Construir nueva fecha/hora de inicio con la zona horaria correcta
-    #    new_date_iso: 'YYYY-MM-DD', new_time_hhmm: 'HH:MM'
     new_start_naive = datetime.strptime(f"{new_date_iso} {new_time_hhmm}", "%Y-%m-%d %H:%M")
     new_start = tz_obj.localize(new_start_naive)
     new_end = new_start + duration

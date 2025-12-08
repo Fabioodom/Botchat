@@ -1,6 +1,5 @@
 # chat_manager.py
 from backend.db import execute_query, query_all, get_user_by_email
-# Importaciones para manejar el historial de chat de forma correcta
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_ollama import OllamaLLM
@@ -10,11 +9,7 @@ from datetime import datetime
 import re
 import json
 import streamlit as st
-# Asumimos que esta función está en tu backend (agent_rulebased.py)
 from backend.agent_rulebased import extract_json_block
-
-#============================================================
-#Impl rama
 
 
 class ChatManagerDB:
@@ -34,7 +29,7 @@ class ChatManagerDB:
         self.model_name = model_name or "llama3.2:1b"
 
         # =========================================================
-        # SYSTEM PROMPT COMPLETO
+        # SYSTEM PROMPT COMPLETO (el que ya tienes, lo dejo igual)
         # =========================================================
         self.prompt_template = ChatPromptTemplate.from_messages([
             (
@@ -205,7 +200,6 @@ class ChatManagerDB:
                 ❌ Bot: "¿Quieres que genere el JSON?" (PREGUNTA INNECESARIA)
                 """
             ),
-
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}")
         ])
@@ -224,7 +218,7 @@ class ChatManagerDB:
             if not self.api_key:
                 raise ValueError("❌ Falta GROQ_API_KEY para usar Groq")
             self.groq_client = Groq(api_key=self.api_key)
-            self.llm = None  # No usamos LangChain para Groq
+            self.llm = None
         else:
             raise ValueError("Proveedor de LLM no válido. Use 'ollama' o 'groq'.")
 
@@ -274,7 +268,6 @@ class ChatManagerDB:
         """Extrae el texto que NO es un bloque JSON para la memoria."""
         json_match = re.search(r'```json\s*(\{.*?\})\s*```', bot_resp, re.DOTALL)
         if json_match:
-            # Reemplaza el bloque JSON con una cadena vacía
             cleaned = bot_resp[:json_match.start()] + bot_resp[json_match.end():]
             return cleaned.strip()
         return bot_resp.strip()
@@ -339,7 +332,6 @@ class ChatManagerDB:
             )
             if parsed:
                 fecha_iso = parsed.strftime("%Y-%m-%d")
-                # Si también extrajo hora distinta de 00:00, usarla
                 if not hora_iso and (parsed.hour != 0 or parsed.minute != 0):
                     hora_iso = parsed.strftime("%H:%M")
 
@@ -361,13 +353,53 @@ class ChatManagerDB:
         - Solo usa el LLM como último recurso cuando no se puede inferir nada claro
         """
 
-        # 1) Parseo de fecha y hora (posible nueva fecha/hora para create/modify)
+        # 1) Parseo de fecha y hora
         processed, fecha_iso, hora_iso = self.preprocess_input(user_input)
         texto_usuario_lower = user_input.lower().strip()
+        texto = texto_usuario_lower  # por comodidad
 
-        usa_pdf = any(p in texto_usuario_lower for p in [
-            "usar el pdf", "usa el pdf", "según el pdf", "segun el pdf", "del pdf", "del documento"
+        # 1) Preguntar sobre el PDF (no crear cita)
+        quiere_preguntar_pdf = any(p in texto for p in [
+            "qué dice el pdf", "que dice el pdf",
+            "qué dice el documento", "que dice el documento",
+            "resume el pdf", "resumen del pdf",
+            "cuéntame sobre el pdf", "cuentame sobre el pdf",
+            "de qué trata el pdf", "de que trata el pdf",
+            "explica el pdf", "explicame el pdf",
+            "información del pdf", "informacion del pdf"
         ])
+
+        # 2) Usar el PDF para rellenar datos de una cita (crear)
+        usa_pdf = any(p in texto for p in [
+            "usa el pdf", "usar el pdf",
+            "saca los datos del pdf",
+            "crea la cita con el pdf",
+            "crea la cita con los datos del pdf",
+            "con los datos del pdf",
+            "según el pdf", "segun el pdf"
+        ])
+
+        # Detectar si el usuario quiere usar el PDF
+        usa_pdf = any(p in texto_usuario_lower for p in [
+            "pdf", "documento", "archivo", "del pdf", "según el pdf", 
+            "usa el pdf", "usar el pdf", "lee el pdf", "del documento",
+            "cuéntame sobre", "cuentame sobre", "qué dice", "que dice",
+            "resume", "resumen", "información del", "informacion del"
+        ])
+
+        # Si hay PDF cargado y el usuario pregunta algo genérico, asumir que pregunta por el PDF
+        pdf_text = st.session_state.get("pdf_text", "") or ""
+        tiene_pdf = len(pdf_text) > 0
+
+        if tiene_pdf and not usa_pdf:
+            # Detectar preguntas genéricas que probablemente se refieren al PDF
+            preguntas_genericas = [
+                "qué es", "que es", "de qué trata", "de que trata",
+                "cuál es", "cual es", "dime sobre", "háblame de", "hablame de",
+                "explica", "información", "informacion", "datos"
+            ]
+            if any(p in texto_usuario_lower for p in preguntas_genericas):
+                usa_pdf = True
 
         # 2) Inicializar estado
         self.init_conversation_state()
@@ -379,7 +411,7 @@ class ChatManagerDB:
         if hora_iso and not state.get("hora_iso"):
             state["hora_iso"] = hora_iso
 
-        # 4) Intentar extraer servicio del texto (para create)
+        # 4) Intentar extraer servicio del texto
         servicio = None
         servicios_map = {
             "médico de cabecera": ["médico de cabecera", "medico de cabecera", "cabecera"],
@@ -406,7 +438,6 @@ class ChatManagerDB:
                 break
 
         if not servicio:
-            # Buscar patrones como "cita de X", "reunión de X", etc.
             match_servicio = re.search(
                 r'(?:cita|reunion|reunión|evento)\s+(?:de|con|para)\s+([a-záéíóúñ\s]+?)(?:\s+para|\s+el|\s+mañana|$)',
                 texto_usuario_lower
@@ -417,7 +448,7 @@ class ChatManagerDB:
         if servicio and not state.get("servicio"):
             state["servicio"] = servicio
 
-        # 5) Datos del usuario actual (email + nombre)
+        # 5) Datos del usuario actual
         current_email_env = os.getenv("CURRENT_USER_EMAIL", "")
         user_row = get_user_by_email(current_email_env) if current_email_env else None
 
@@ -441,17 +472,16 @@ class ChatManagerDB:
         quiere_modificar = any(p in texto_usuario_lower for p in [
             "cambia", "modifica", "reprograma", "mueve"
         ])
-        quiere_crear = (
-            any(p in texto_usuario_lower for p in [
-                "agendame", "agéndame", "agenda", "agendar", "ponme una cita",
-                "quiero una cita", "reserva una cita", "programa una cita"
-            ])
-            or "cita" in texto_usuario_lower
-            or "reunión" in texto_usuario_lower
-            or "reunion" in texto_usuario_lower
-        )
+        quiere_crear = any(p in texto_usuario_lower for p in [
+            "agendame", "agéndame",
+            "agenda una cita", "agendar una cita",
+            "ponme una cita",
+            "quiero una cita",
+            "reserva una cita", "reservar una cita",
+            "programa una cita", "programar una cita",
+            "quiero agendar", "quiero reservar", "quiero programar"
+        ])
 
-        # 🔁 NUEVO: si ya hay datos de cita en el estado, seguimos en modo "create"
         tiene_estado_creacion = any(
             state.get(k) for k in ("servicio", "fecha_iso", "hora_iso", "nombre", "email")
         )
@@ -459,7 +489,76 @@ class ChatManagerDB:
             quiere_crear = True
 
         # =====================================================
-        # B) CONSULT: "ver mis citas", etc. (SIN LLM)
+        # F1) RESPONDER PREGUNTAS SOBRE EL PDF (PRIORITARIO)
+        # =====================================================
+        if tiene_pdf and quiere_preguntar_pdf:
+            # El usuario está preguntando sobre el PDF, NO quiere crear/modificar/cancelar
+            history = self.get_memory()
+
+            prompt_pdf = ChatPromptTemplate.from_messages([
+                (
+                    "system",
+                    """
+                    Eres un asistente que ayuda a responder preguntas sobre documentos PDF.
+
+                    El usuario ha subido un PDF y te está haciendo una pregunta sobre él.
+
+                    CONTEXTO DEL PDF:
+                    ====== INICIO PDF ======
+                    {pdf_text}
+                    ====== FIN PDF ======
+
+                    INSTRUCCIONES:
+                    - Lee el contenido del PDF.
+                    - Responde la pregunta del usuario de forma clara y concisa.
+                    - Si el PDF contiene información sobre citas médicas, fechas, nombres, etc., puedes mencionarla.
+                    - Si no encuentras la información, dilo claramente.
+                    - NO generes JSON.
+                    - NO generes código.
+                    - Responde solo en lenguaje natural.
+                    """
+                ),
+                MessagesPlaceholder(variable_name="chat_history"),
+                ("human", "{input}")
+            ])
+
+            prompt = prompt_pdf.format_prompt(
+                chat_history=history,
+                input=user_input,
+                pdf_text=pdf_text[:4000]  # Limitar un poco el tamaño
+            )
+
+            try:
+                if self.provider == "ollama":
+                    bot_resp_messages = self.llm.invoke(prompt.to_messages())
+                    bot_resp = bot_resp_messages.content if hasattr(bot_resp_messages, 'content') else str(bot_resp_messages)
+                elif self.provider == "groq":
+                    messages = []
+                    for msg in prompt.to_messages():
+                        if hasattr(msg, 'type'):
+                            role = "user" if msg.type == "human" else "assistant"
+                            if msg.type == "system":
+                                role = "system"
+                            messages.append({"role": role, "content": msg.content})
+
+                    completion = self.groq_client.chat.completions.create(
+                        model=self.model_name,
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=512,
+                    )
+                    bot_resp = completion.choices[0].message.content
+
+            except Exception as e:
+                bot_resp = f"❌ Error al leer el PDF: {str(e)}"
+                st.error(bot_resp)
+                return bot_resp
+
+            self.save_memory(user_input, bot_resp)
+            return bot_resp
+
+        # =====================================================
+        # B) CONSULT
         # =====================================================
         if quiere_consultar:
             filtro_email = None
@@ -485,10 +584,9 @@ class ChatManagerDB:
                 return bot_resp
 
         # =====================================================
-        # C) MODIFY: "cambia mi cita del ... a las ..." (SIN LLM si se puede)
+        # C) MODIFY
         # =====================================================
         if quiere_modificar:
-            # Fecha de la cita que EXISTE (la original a modificar)
             filtro_fecha = None
             m1 = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", user_input)
             m2 = re.search(r"(\d{4})-(\d{2})-(\d{2})", user_input)
@@ -502,7 +600,6 @@ class ChatManagerDB:
             nueva_fecha = fecha_iso
             nueva_hora = hora_iso
 
-            # Caso ideal: usuario da todo en una frase
             if filtro_fecha and nueva_fecha and nueva_hora:
                 bot_resp = (
                     "```json\n"
@@ -517,7 +614,6 @@ class ChatManagerDB:
                 self.save_memory(user_input, bot_resp)
                 return bot_resp
 
-            # Faltan datos → preguntar lo mínimo, SIN LLM
             if not filtro_fecha:
                 bot_resp = "¿De qué fecha es la cita que quieres cambiar?"
                 self.save_memory(user_input, bot_resp)
@@ -529,7 +625,7 @@ class ChatManagerDB:
                 return bot_resp
 
         # =====================================================
-        # D) CANCEL: "cancela mi cita del ..." (SIN LLM si se puede)
+        # D) CANCEL
         # =====================================================
         if quiere_cancelar:
             filtro = None
@@ -559,7 +655,7 @@ class ChatManagerDB:
                 return bot_resp
 
         # =====================================================
-        # E) CREATE: flujo guiado multi-turno (SIN LLM si se puede)
+        # E) CREATE
         # =====================================================
         if quiere_crear:
             nombre = state.get("nombre")
@@ -567,8 +663,96 @@ class ChatManagerDB:
             servicio_state = state.get("servicio")
             fecha_state = state.get("fecha_iso")
             hora_state = state.get("hora_iso")
+            
+            # Si el usuario pide usar el PDF y hay PDF cargado, intentar extraer datos
+            if usa_pdf and tiene_pdf:
+                # Llamar al LLM para extraer datos estructurados del PDF
+                prompt_extract = ChatPromptTemplate.from_messages([
+                    (
+                        "system",
+                        """
+                        Extrae la siguiente información del PDF y devuélvela en formato JSON:
+                        
+                        CONTEXTO DEL PDF:
+                        ====== INICIO PDF ======
+                        {pdf_text}
+                        ====== FIN PDF ======
+                        
+                        Extrae:
+                        - nombre: nombre completo del paciente/persona
+                        - email: correo electrónico
+                        - servicio: tipo de cita o consulta (ej: "médico de cabecera", "dermatología", etc.)
+                        - fecha_iso: fecha en formato YYYY-MM-DD
+                        - hora_iso: hora en formato HH:MM
+                        - observaciones: cualquier nota adicional
+                        
+                        Devuelve SOLO un JSON con estos campos. Si no encuentras algún dato, usa null.
+                        
+                        Ejemplo:
+                        {{
+                        "nombre": "Juan Pérez",
+                        "email": "juan@example.com",
+                        "servicio": "médico de cabecera",
+                        "fecha_iso": "2025-12-15",
+                        "hora_iso": "10:30",
+                        "observaciones": "Revisión anual"
+                        }}
+                        """
+                    ),
+                    ("human", "Extrae los datos de la cita del PDF")
+                ])
+                
+                prompt = prompt_extract.format_prompt(pdf_text=pdf_text[:4000])
+                
+                try:
+                    if self.provider == "ollama":
+                        bot_resp_messages = self.llm.invoke(prompt.to_messages())
+                        extraction_resp = bot_resp_messages.content if hasattr(bot_resp_messages, 'content') else str(bot_resp_messages)
+                    elif self.provider == "groq":
+                        messages = []
+                        for msg in prompt.to_messages():
+                            if hasattr(msg, 'type'):
+                                role = "user" if msg.type == "human" else "assistant"
+                                if msg.type == "system":
+                                    role = "system"
+                                messages.append({"role": role, "content": msg.content})
 
-            # Caso 1: TODO completo → JSON create
+                        completion = self.groq_client.chat.completions.create(
+                            model=self.model_name,
+                            messages=messages,
+                            temperature=0.1,
+                            max_tokens=512,
+                        )
+                        extraction_resp = completion.choices[0].message.content
+                    
+                    # Intentar extraer JSON de la respuesta
+                    pdf_data = extract_json_block(extraction_resp)
+                    
+                    if pdf_data:
+                        # Actualizar el estado con los datos extraídos del PDF
+                        if pdf_data.get("nombre") and not nombre:
+                            state["nombre"] = pdf_data["nombre"]
+                            nombre = pdf_data["nombre"]
+                        if pdf_data.get("email") and not email:
+                            state["email"] = pdf_data["email"]
+                            email = pdf_data["email"]
+                        if pdf_data.get("servicio") and not servicio_state:
+                            state["servicio"] = pdf_data["servicio"]
+                            servicio_state = pdf_data["servicio"]
+                        if pdf_data.get("fecha_iso") and not fecha_state:
+                            state["fecha_iso"] = pdf_data["fecha_iso"]
+                            fecha_state = pdf_data["fecha_iso"]
+                        if pdf_data.get("hora_iso") and not hora_state:
+                            state["hora_iso"] = pdf_data["hora_iso"]
+                            hora_state = pdf_data["hora_iso"]
+                        if pdf_data.get("observaciones"):
+                            state["observaciones"] = pdf_data["observaciones"]
+                
+                except Exception as e:
+                    # Si falla la extracción, continuar con el flujo normal
+                    pass
+            
+            # Resto del código de CREATE (igual que antes)
             if nombre and email and servicio_state and fecha_state and hora_state:
                 bot_resp = (
                     "```json\n"
@@ -588,33 +772,28 @@ class ChatManagerDB:
                 self.reset_conversation_state()
                 return bot_resp
 
-            # Caso 2: tenemos fecha y hora, falta servicio
             if fecha_state and hora_state and not servicio_state:
                 bot_resp = f"¿Qué tipo de cita o evento necesitas para el {fecha_state} a las {hora_state}?"
                 self.save_memory(user_input, bot_resp)
                 return bot_resp
 
-            # Caso 3: tenemos fecha, no hora
             if fecha_state and not hora_state:
                 bot_resp = f"¿A qué hora quieres la cita del {fecha_state}?"
                 self.save_memory(user_input, bot_resp)
                 return bot_resp
 
-            # Caso 4: no tenemos fecha
             if not fecha_state:
                 bot_resp = "¿Para qué día quieres la cita?"
                 self.save_memory(user_input, bot_resp)
                 return bot_resp
 
-            # Caso 5: como fallback, si solo falta servicio
             if not servicio_state:
                 bot_resp = "¿Qué tipo de cita o evento necesitas?"
                 self.save_memory(user_input, bot_resp)
                 return bot_resp
-
+                
         # =====================================================
-        # F0) NUEVO: si el estado YA está completo para crear, devolvemos JSON
-        #      sin pasar por el LLM (evita bucles de “¿Qué tipo de cita…?”)
+        # F0) Si el estado YA está completo para crear
         # =====================================================
         nombre = state.get("nombre")
         email = state.get("email")
@@ -640,6 +819,7 @@ class ChatManagerDB:
             self.save_memory(user_input, bot_resp)
             self.reset_conversation_state()
             return bot_resp
+        
 
         # =====================================================
         # F) Si no hemos podido determinar nada → usar LLM
@@ -652,9 +832,8 @@ class ChatManagerDB:
 
         pdf_text = st.session_state.get("pdf_text", "") or ""
         if usa_pdf:
-            pdf_text = pdf_text[:4000]  # recorte por seguridad
+            pdf_text = pdf_text[:4000]
         else:
-            # Si no ha pedido usar el PDF, no metas el texto para no distraer al modelo
             pdf_text = ""
 
         prompt = self.prompt_template.format_prompt(
@@ -689,7 +868,6 @@ class ChatManagerDB:
             st.error(bot_resp)
             return bot_resp
 
-        # Procesar respuesta del LLM (por si devuelve JSON)
         data = extract_json_block(bot_resp)
         if data:
             self.update_conversation_state(data)

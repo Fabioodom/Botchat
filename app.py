@@ -18,17 +18,19 @@ from backend.services import (
     find_appointment,
     update_appointment,
     extract_text_from_pdf_bytes
-    
 )
-from backend.google_calendar import create_event as gc_create_event, update_event as gc_update_event, delete_event as gc_delete_event
+from backend.google_calendar import (
+    create_event as gc_create_event, 
+    update_event as gc_update_event, 
+    delete_event as gc_delete_event
+)
 from models.appointment import Appointment
 from backend.chat_manager import ChatManagerDB
-from backend.agent_rulebased import extract_json_block  
+from backend.agent_rulebased import extract_json_block
 
 # Google Auth
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-
 
 # ============================
 # INICIALIZACIÓN
@@ -45,27 +47,26 @@ SCOPES = [
 
 os.makedirs("tokens", exist_ok=True)
 
-# Streamlit setup
+
 st.set_page_config(page_title="Bot de Citas (IA + Calendar)", page_icon="🗓️", layout="wide")
 st.title("🤖 Bot de Citas con IA y Google Calendar")
 
 
-# Estado global
+
 if "chat_manager" not in st.session_state:
     st.session_state.chat_manager = None
 if "usuario_id" not in st.session_state:
     st.session_state.usuario_id = None
-# 🆕 Inicializar texto del PDF
 if "pdf_text" not in st.session_state:
     st.session_state.pdf_text = ""
 
-# 🆕 NUEVO: estado conversacional para manejar preguntas pendientes
-if "conversation_state" not in st.session_state:
-    st.session_state.conversation_state = {
-        "pending_action": None,
-        "pending_data": {}
-    }
-    
+if "system_messages" not in st.session_state:
+    st.session_state.system_messages = []
+
+if "local_chat_history" not in st.session_state:
+    st.session_state.local_chat_history = []
+
+
 # ============================
 # SIDEBAR
 # ============================
@@ -109,20 +110,20 @@ with st.sidebar:
     uploaded_pdf = st.file_uploader("Sube un PDF (opcional)", type=["pdf"])
 
     if uploaded_pdf is not None:
-        # Leemos el archivo en bytes
         pdf_bytes = uploaded_pdf.read()
-
-        # Llamamos al servicio de backend
         pdf_text = extract_text_from_pdf_bytes(pdf_bytes)
-        
-        
-
-        # Guardamos el texto en sesión para usarlo en cualquier parte de la app
         st.session_state.pdf_text = pdf_text
-
-        st.success("✅ PDF cargado y leído correctamente")
+        st.session_state.pdf_filename = uploaded_pdf.name
+        st.success(f"✅ PDF '{uploaded_pdf.name}' cargado correctamente")
         
-
+        # Mostrar preview del contenido
+        with st.expander("📄 Ver contenido del PDF"):
+            st.text_area("Texto extraído", pdf_text[:2000], height=200, disabled=True)
+            if len(pdf_text) > 2000:
+                st.caption(f"Mostrando los primeros 2000 caracteres de {len(pdf_text)} totales")
+    else:
+        st.session_state.pdf_text = ""
+        st.session_state.pdf_filename = None
 
     # ------------------- LOGIN GOOGLE -----------------------
     st.subheader("🔑 Autenticación con Google")
@@ -182,9 +183,11 @@ with st.sidebar:
                 st.session_state.pop(key, None)
             st.rerun()
 
-    # ------------------- RESET CHAT -----------------------
+    
     if st.button("🧹 Limpiar chat") and st.session_state.chat_manager:
         st.session_state.chat_manager.reset_memory()
+        st.session_state.local_chat_history = []
+        st.session_state.system_messages = []
         st.rerun()
 
 
@@ -199,7 +202,6 @@ if st.session_state.get("usuario_id") and not st.session_state.chat_manager:
         api_key=api_key,
     )
 
-
 # ============================
 # INTERFAZ PRINCIPAL
 # ============================
@@ -208,46 +210,63 @@ left, right = st.columns((7,5))
 with left:
     chat_manager = st.session_state.chat_manager
 
-    # Mostrar historial del chat
-    if chat_manager:
-        for m in chat_manager.get_memory():
-            
-            # 1. Determinar el rol usando el atributo 'type' del objeto LangChain
-            # 'm.type' será 'human' o 'ai'
-            role_type = m.type 
-            
-            # 2. Mapear el tipo de LangChain al rol de Streamlit
-            role = "user" if role_type == "human" else "assistant"
-            
-            # 3. Acceder al contenido usando el atributo 'content'
-            content = m.content
-            
-            with st.chat_message(role):
-                st.markdown(content)
+    st.markdown("### 💬 Conversación")
 
-    # Entrada del usuario
+    # Contenedor de chat con altura fija
+    chat_container = st.container(height=500)
+
+    with chat_container:
+        # 1) Pintar historial de mensajes (usuario y bot)
+        for msg in st.session_state.local_chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # 2) Pintar mensajes de sistema (éxito, error, etc.) como si fueran mensajes del bot
+        for msg in st.session_state.system_messages:
+            with st.chat_message("assistant"):
+                tipo = msg.get("type", "markdown")
+                texto = msg.get("text", "")
+                if tipo == "success":
+                    st.success(texto)
+                elif tipo == "info":
+                    st.info(texto)
+                elif tipo == "warning":
+                    st.warning(texto)
+                elif tipo == "error":
+                    st.error(texto)
+                else:
+                    st.markdown(texto)
+
+    # Input del usuario
     user_msg = st.chat_input("Escribe tu mensaje…")
 
     if user_msg and chat_manager:
-        with st.chat_message("user"):
-            st.markdown(user_msg)
 
-        response = chat_manager.ask(user_msg)
+        # 1) Añadir el mensaje del usuario al historial local
+        st.session_state.local_chat_history.append({
+            "role": "user",
+            "content": user_msg
+        })
 
-        with st.chat_message("assistant"):
-            st.markdown(response)
+        # 2) Llamar al gestor de chat (esto guarda en la BD y devuelve la respuesta)
+        raw_response = chat_manager.ask(user_msg)
 
-        data = extract_json_block(response)
+        # 3) Añadir la respuesta del bot al historial local
+        st.session_state.local_chat_history.append({
+            "role": "assistant",
+            "content": raw_response
+        })
+
+        # 4) Intentar extraer JSON para ejecutar acciones (create / consult / cancel / modify)
+        data = extract_json_block(raw_response)
 
         if data:
+            action = data.get("action", "").lower()
 
-            action = data.get("action", "create").lower()
-            
             # --------------------------------------------------------
-            # 1) CREAR CITA
+            # CREAR CITA
             # --------------------------------------------------------
             if action == "create":
-
                 nombre = data.get("nombre")
                 email = data.get("email")
                 servicio = data.get("servicio")
@@ -256,7 +275,6 @@ with left:
                 observaciones = data.get("observaciones", "")
 
                 if all([nombre, email, servicio, fecha_iso, hora_iso]):
-
                     appt = Appointment(
                         nombre=nombre,
                         email=email,
@@ -270,9 +288,12 @@ with left:
                     )
 
                     new_id = add_appointment(appt)
-                    st.success(f"✅ Cita guardada (ID={new_id})")
+                    st.session_state.system_messages.append({
+                        "type": "success",
+                        "text": f"✅ Cita guardada (ID={new_id})"
+                    })
 
-                    # Añadir a Google Calendar
+                    # Crear evento en Google Calendar (si está activado)
                     if add_to_calendar:
                         try:
                             token_path = st.session_state.get("token_path")
@@ -290,33 +311,45 @@ with left:
                                 set_event_id_for_appointment(new_id, event_id)
                             link = created.get("htmlLink")
                             if link:
-                                st.success(f"📅 Evento creado: [Abrir]({link})")
-                            # 👉 Recargar para que el iframe del calendario se actualice
-                            st.rerun()
+                                st.session_state.system_messages.append({
+                                    "type": "success",
+                                    "text": f"📅 Evento creado: [Abrir]({link})"
+                                })
                         except Exception as e:
-                            st.warning(f"⚠️ No se pudo crear evento: {e}")
+                            st.session_state.system_messages.append({
+                                "type": "warning",
+                                "text": f"⚠️ No se pudo crear evento en Google Calendar: {e}"
+                            })
 
             # --------------------------------------------------------
-            # 2) CONSULTAR CITAS
+            # CONSULTAR CITAS
             # --------------------------------------------------------
             elif action == "consult":
-
-                st.info("📅 Consultando todas tus citas futuras en Google Calendar…")
-
                 from backend.google_calendar import get_future_events
-                eventos = get_future_events()
+                st.session_state.system_messages.append({
+                    "type": "info",
+                    "text": "📅 Consultando todas tus citas futuras en Google Calendar…"
+                })
+
+                try:
+                    eventos = get_future_events()
+                except Exception as e:
+                    eventos = []
+                    st.session_state.system_messages.append({
+                        "type": "warning",
+                        "text": f"⚠️ Error al consultar Google Calendar: {e}"
+                    })
 
                 if not eventos:
-                    st.warning("❌ No tienes citas futuras en tu calendario.")
+                    st.session_state.system_messages.append({
+                        "type": "warning",
+                        "text": "❌ No tienes citas futuras en tu calendario."
+                    })
                 else:
-                    st.success(f"📋 Encontradas {len(eventos)} cita(s):")
-
+                    texto = f"📋 **Encontradas {len(eventos)} cita(s):**\n\n"
                     for e in eventos:
                         start_raw = e["start"].get("dateTime") or e["start"].get("date")
-
-                        if not start_raw:
-                            start_fmt = "Fecha desconocida"
-                        else:
+                        if start_raw:
                             try:
                                 if "dateTime" in e["start"]:
                                     start_fmt = dtparse.parse(start_raw).strftime("%Y-%m-%d %H:%M")
@@ -324,21 +357,28 @@ with left:
                                     start_fmt = dtparse.parse(start_raw).strftime("%Y-%m-%d")
                             except Exception:
                                 start_fmt = "Fecha inválida"
+                        else:
+                            start_fmt = "Fecha desconocida"
+                        texto += f"- **{e['summary']}** → {start_fmt}\n"
 
-                        st.markdown(f"- **{e['summary']}** → {start_fmt}")
+                    st.session_state.system_messages.append({
+                        "type": "markdown",
+                        "text": texto
+                    })
 
             # --------------------------------------------------------
-            # 3) CANCELAR CITA (CON GOOGLE CALENDAR)
+            # CANCELAR CITA
             # --------------------------------------------------------
             elif action == "cancel":
-
                 filtro = data.get("filtro", "")
-                st.info(f"🗑️ Buscando para eliminar: **{filtro}**")
-
                 from backend.services import list_appointments, delete_appointment
                 current_email = os.getenv("CURRENT_USER_EMAIL", "")
 
-                # Intentar sacar una fecha del filtro (dd/mm/yyyy o yyyy-mm-dd)
+                st.session_state.system_messages.append({
+                    "type": "info",
+                    "text": f"🗑️ Buscando cita para eliminar con filtro: **{filtro}**"
+                })
+
                 import re
                 fecha_busqueda = None
                 m1 = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", filtro)
@@ -355,56 +395,61 @@ with left:
                 else:
                     posibles = list_appointments(q=filtro)
 
-                # Filtrar por usuario
                 resultados = [c for c in posibles if c.get("usuario_id") == current_email]
 
                 if not resultados:
-                    st.warning("❌ No encontré ninguna cita para cancelar.")
+                    st.session_state.system_messages.append({
+                        "type": "warning",
+                        "text": "❌ No encontré ninguna cita para cancelar."
+                    })
                 else:
-                    cita = resultados[0]  # primera coincidencia
-
+                    cita = resultados[0]
                     token_path = st.session_state.get("token_path")
                     from backend.google_calendar import delete_event as gc_delete_event
-                    from backend.services import delete_appointment
 
-                    # ----------------------------------------------------
-                    # 1) ELIMINAR DEL GOOGLE CALENDAR
-                    # ----------------------------------------------------
                     try:
                         event_id = cita.get("id_evento_google")
-
                         if event_id:
                             gc_delete_event(event_id, token_path=token_path)
-                            st.success("📅 Evento eliminado de Google Calendar.")
-                            # 👉 Recargar para que el iframe del calendario se actualice
-                            st.rerun()
+                            st.session_state.system_messages.append({
+                                "type": "success",
+                                "text": "📅 Evento eliminado de Google Calendar."
+                            })
                         else:
-                            st.info("ℹ️ La cita no tenía evento en Google Calendar.")
+                            st.session_state.system_messages.append({
+                                "type": "info",
+                                "text": "ℹ️ La cita no tenía evento en Google Calendar."
+                            })
                     except Exception as e:
-                        st.warning(f"⚠️ Error eliminando evento de Google Calendar: {e}")
+                        st.session_state.system_messages.append({
+                            "type": "warning",
+                            "text": f"⚠️ Error eliminando en Google Calendar: {e}"
+                        })
 
-                    # ----------------------------------------------------
-                    # 2) ELIMINAR DE LA BASE DE DATOS
-                    # ----------------------------------------------------
                     delete_appointment(cita["id_cita"])
-                    st.success(f"🗑️ Cita eliminada correctamente de la base de datos (ID={cita['id_cita']}).")
+                    st.session_state.system_messages.append({
+                        "type": "success",
+                        "text": f"🗑️ Cita eliminada de la base de datos (ID={cita['id_cita']})."
+                    })
 
             # --------------------------------------------------------
-            # 4) MODIFICAR CITA  (VERSIÓN COMPLETA CON GOOGLE CALENDAR)
+            # MODIFICAR CITA
             # --------------------------------------------------------
             elif action == "modify":
                 filtro = data.get("filtro", "")
                 nueva_fecha = data.get("nueva_fecha")
                 nueva_hora = data.get("nueva_hora")
 
-                st.info(f"✏️ Modificando cita que coincida con: **{filtro}**")
-
                 from backend.services import list_appointments, update_appointment, set_event_id_for_appointment
                 from backend.google_calendar import update_event as gc_update_event, create_event as gc_create_event
 
                 current_email = os.getenv("CURRENT_USER_EMAIL", "")
 
-                # Extraer fecha del filtro si existe
+                st.session_state.system_messages.append({
+                    "type": "info",
+                    "text": f"✏️ Buscando cita para modificar con filtro: **{filtro}**"
+                })
+
                 import re
                 fecha_busqueda = None
                 m1 = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", filtro)
@@ -424,76 +469,89 @@ with left:
                 resultados = [c for c in posibles if c.get("usuario_id") == current_email]
 
                 if not resultados:
-                    st.warning("❌ No encontré ninguna cita para modificar.")
+                    st.session_state.system_messages.append({
+                        "type": "warning",
+                        "text": "❌ No encontré ninguna cita para modificar."
+                    })
                 else:
-                    cita = resultados[0]  # primera coincidencia del usuario logueado
+                    cita = resultados[0]
                     token_path = st.session_state.get("token_path")
                     old_event_id = cita.get("id_evento_google")
 
-                    # Validaciones mínimas
                     if not nueva_fecha or not nueva_hora:
-                        st.warning("⚠️ Faltan datos para modificar la cita (fecha y/o hora nuevas).")
-                        st.stop()
+                        st.session_state.system_messages.append({
+                            "type": "warning",
+                            "text": "⚠️ Faltan datos para modificar la cita (nueva fecha y/o nueva hora)."
+                        })
+                    else:
+                        try:
+                            if old_event_id:
+                                gc_update_event(
+                                    old_event_id,
+                                    nueva_fecha,
+                                    nueva_hora,
+                                    token_path=token_path
+                                )
+                                st.session_state.system_messages.append({
+                                    "type": "success",
+                                    "text": "📅 Evento actualizado en Google Calendar."
+                                })
+                            else:
+                                new_event = gc_create_event(
+                                    summary=f"{cita['tipo']} — {cita['usuario_id']}",
+                                    date_iso=nueva_fecha,
+                                    time_hhmm=nueva_hora,
+                                    duration_minutes=60,
+                                    description=cita.get("descripcion", ""),
+                                    attendees_emails=[cita["usuario_id"]],
+                                    token_path=token_path
+                                )
+                                if new_event.get("id"):
+                                    set_event_id_for_appointment(cita["id_cita"], new_event["id"])
+                                st.session_state.system_messages.append({
+                                    "type": "success",
+                                    "text": "📅 Nuevo evento creado en Google Calendar."
+                                })
+                        except Exception as e:
+                            st.session_state.system_messages.append({
+                                "type": "warning",
+                                "text": f"⚠️ Error actualizando Google Calendar: {e}"
+                            })
 
-                    # 1) Google Calendar
-                    try:
-                        if old_event_id:
-                            updated_event = gc_update_event(
-                                old_event_id,
-                                nueva_fecha,
-                                nueva_hora,
-                                token_path=token_path
-                            )
-                            st.success("📅 Evento actualizado en Google Calendar.")
-                            # 👉 Recargar para que el iframe del calendario se actualice
-                            st.rerun()
-                        else:
-                            new_event = gc_create_event(
-                                summary=f"{cita['tipo']} — {cita['usuario_id']}",
-                                date_iso=nueva_fecha,
-                                time_hhmm=nueva_hora,
-                                duration_minutes=60,
-                                description=cita.get("descripcion", ""),
-                                attendees_emails=[cita["usuario_id"]],
-                                token_path=token_path
-                            )
-                            if new_event.get("id"):
-                                set_event_id_for_appointment(cita["id_cita"], new_event["id"])
-                            st.success("📅 Nuevo evento creado en Google Calendar.")
-                            # 👉 También recargamos aquí
-                            st.rerun()
-                    except Exception as e:
-                        st.warning(f"⚠️ Error actualizando Google Calendar: {e}")
+                        update_appointment(
+                            usuario_id=cita["usuario_id"],
+                            id_cita=cita["id_cita"],
+                            nueva_fecha=nueva_fecha,
+                            nueva_hora=nueva_hora
+                        )
+                        st.session_state.system_messages.append({
+                            "type": "success",
+                            "text": "✏️ Cita modificada correctamente en la base de datos."
+                        })
 
-                    # 2) BD local
-                    update_appointment(
-                        usuario_id=cita["usuario_id"],
-                        id_cita=cita["id_cita"],
-                        nueva_fecha=nueva_fecha,
-                        nueva_hora=nueva_hora
-                    )
-                    st.success("✏️ Cita modificada correctamente en la base de datos.")
+        
+        st.rerun()
 
 
 with right:
-    st.header("🗓️ Citas guardadas")
+    #st.header("🗓️ Citas guardadas")
 
-    q = st.text_input("Buscar cita (nombre/servicio)")
-    rows = list_appointments(q=q)
+    #q = st.text_input("Buscar cita (nombre/servicio)")
+    #rows = list_appointments(q=q)
 
-    if not rows:
-        st.info("Sin resultados.")
-    else:
-        for r in rows:
-            st.markdown("---")
-            st.markdown(f"**{r['id_cita']}** · {r['tipo']} · {r['fecha']} {r['hora']}")
-            st.caption(f"Usuario: {r['usuario_id']}")
-            if r.get("descripcion"):
-                st.text(f"📝 {r['descripcion']}")
+    #if not rows:
+        #st.info("Sin resultados.")
+    #else:
+        #for r in rows:
+         #   st.markdown("---")
+          #  st.markdown(f"**{r['id_cita']}** · {r['tipo']} · {r['fecha']} {r['hora']}")
+           # st.caption(f"Usuario: {r['usuario_id']}")
+            #if r.get("descripcion"):
+             #   st.text(f"📝 {r['descripcion']}")
 
-            if st.button("🗑️ Eliminar", key=f"del-{r['id_cita']}"):
-                delete_appointment(r['id_cita'])
-                st.rerun()
+            #if st.button("🗑️ Eliminar", key=f"del-{r['id_cita']}"):
+             #   delete_appointment(r['id_cita'])
+              #  st.rerun()
 
     st.markdown("---")
     st.header("📅 Tu Google Calendar")
@@ -512,10 +570,10 @@ with right:
         st.info("Inicia sesión para ver tu calendario.")
 
     st.markdown("---")
-    st.header("📄 Contexto desde PDF")
-    pdf_text = st.session_state.get("pdf_text", "")   # 👈 lo traes de sesión
+    #st.header("📄 Contexto desde PDF")
+    #pdf_text = st.session_state.get("pdf_text", "")
 
-    if pdf_text:
-        st.text_area("Texto del PDF", pdf_text[:5000], height=200)
-    else:
-        st.info("No se ha cargado ningún PDF todavía.")
+    #if pdf_text:
+        #st.text_area("Texto del PDF", pdf_text[:5000], height=200)
+    #else:
+        #st.info("No se ha cargado ningún PDF todavía.")

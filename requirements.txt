@@ -11,3 +11,4 @@ langchain_ollama
 dotenv
 dateparser
 langchain_community
+PyPDF2
