@@ -26,7 +26,7 @@ from backend.google_calendar import (
 )
 from models.appointment import Appointment
 from backend.chat_manager import ChatManagerDB
-from backend.agent_rulebased import extract_json_block
+from backend.extraccion_texto import extract_json_block
 
 # Google Auth
 from google_auth_oauthlib.flow import InstalledAppFlow

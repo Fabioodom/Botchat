@@ -9,7 +9,7 @@ from datetime import datetime
 import re
 import json
 import streamlit as st
-from backend.agent_rulebased import extract_json_block
+from backend.extraccion_texto import extract_json_block
 
 
 class ChatManagerDB:
