@@ -1,4 +1,4 @@
-# 🩺🤖 Agenda IA Médica
+# 🩺🤖 Agenda IA Inteligente
 
 **Asistente conversacional inteligente** para gestionar citas y eventos (médicos, reuniones, exámenes, etc.) utilizando:
 
