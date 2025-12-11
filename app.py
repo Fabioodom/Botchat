@@ -534,24 +534,7 @@ with left:
 
 
 with right:
-    #st.header("🗓️ Citas guardadas")
 
-    #q = st.text_input("Buscar cita (nombre/servicio)")
-    #rows = list_appointments(q=q)
-
-    #if not rows:
-        #st.info("Sin resultados.")
-    #else:
-        #for r in rows:
-         #   st.markdown("---")
-          #  st.markdown(f"**{r['id_cita']}** · {r['tipo']} · {r['fecha']} {r['hora']}")
-           # st.caption(f"Usuario: {r['usuario_id']}")
-            #if r.get("descripcion"):
-             #   st.text(f"📝 {r['descripcion']}")
-
-            #if st.button("🗑️ Eliminar", key=f"del-{r['id_cita']}"):
-             #   delete_appointment(r['id_cita'])
-              #  st.rerun()
 
     st.markdown("---")
     st.header("📅 Tu Google Calendar")
@@ -570,10 +553,3 @@ with right:
         st.info("Inicia sesión para ver tu calendario.")
 
     st.markdown("---")
-    #st.header("📄 Contexto desde PDF")
-    #pdf_text = st.session_state.get("pdf_text", "")
-
-    #if pdf_text:
-        #st.text_area("Texto del PDF", pdf_text[:5000], height=200)
-    #else:
-        #st.info("No se ha cargado ningún PDF todavía.")
