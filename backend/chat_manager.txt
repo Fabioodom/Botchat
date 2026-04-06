@@ -29,7 +29,7 @@ class ChatManagerDB:
         self.model_name = model_name or "llama3.2:1b"
 
         # =========================================================
-        # SYSTEM PROMPT COMPLETO (el que ya tienes, lo dejo igual)
+        # SYSTEM PROMPT COMPLETO
         # =========================================================
         self.prompt_template = ChatPromptTemplate.from_messages([
             (
@@ -261,7 +261,7 @@ class ChatManagerDB:
         execute_query("DELETE FROM memoria_chat WHERE usuario_id = ?", (self.usuario_id,))
 
     # ============================================================
-    # 🧠 MEMORIA LIMPIA
+    # MEMORIA LIMPIA
     # ============================================================
 
     def _clean_bot_response(self, bot_resp: str) -> str:
@@ -294,7 +294,7 @@ class ChatManagerDB:
         )
 
     # ============================================================
-    # 🔎 PARSEO DE FECHAS
+    # PARSEO DE FECHAS
     # ============================================================
 
     def preprocess_input(self, text: str):
@@ -344,7 +344,7 @@ class ChatManagerDB:
         return processed, fecha_iso, hora_iso
 
     # ============================================================
-    # 💬 MÉTODO PRINCIPAL
+    # MÉTODO PRINCIPAL
     # ============================================================
     def ask(self, user_input: str):
         """

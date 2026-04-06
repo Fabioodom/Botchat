@@ -26,7 +26,7 @@ def _load_creds(token_path: Optional[str], creds_path: Optional[str] = None):
                 os.remove(token_path)
         except Exception as e:
             print(f"⚠️ Error al leer token en {token_path}: {e}")
-            print(f"🔄 Eliminando token corrupto y regenerando...")
+            print(f" Eliminando token corrupto y regenerando...")
             try:
                 os.remove(token_path)
             except:
@@ -40,7 +40,7 @@ def _load_creds(token_path: Optional[str], creds_path: Optional[str] = None):
                 creds.refresh(Request())
             except Exception as e:
                 print(f"⚠️ Error al refrescar token: {e}")
-                print(f"🔄 Iniciando flujo de autenticación completo...")
+                print(f"Iniciando flujo de autenticación completo...")
                 flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
                 creds = flow.run_local_server(port=0)
         else:

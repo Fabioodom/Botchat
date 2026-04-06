@@ -1,4 +1,3 @@
-# backend/db.py
 import sqlite3
 from typing import Optional, Dict
 
@@ -6,7 +5,6 @@ DB_PATH = "botcitas.db"
 
 def get_connection():
     return sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
-
 
 def init_db():
     con = get_connection()

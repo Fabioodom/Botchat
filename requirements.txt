@@ -12,3 +12,11 @@ dotenv
 dateparser
 langchain_community
 PyPDF2
+
+# --- NUEVAS DEPENDENCIAS PARA LA ENTREGA ---
+openai
+crewai
+langchain-openai
+chromadb
+langchain-chroma
+pypdf

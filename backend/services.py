@@ -5,8 +5,13 @@ from .db import get_connection, execute_query, query_all, query_one
 from models.appointment import Appointment
 #Lector pdf
 from PyPDF2 import PdfReader
+import os
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain_community.embeddings import OllamaEmbeddings
 
-
+DB_VECTOR_PATH = "./chroma_db_data"
 
 
 def add_appointment(a: Appointment) -> int:
@@ -16,7 +21,7 @@ def add_appointment(a: Appointment) -> int:
         INSERT INTO citas (usuario_id, fecha, hora, tipo, descripcion, recordatorio, id_evento_google, creado_en)
         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
     """, (
-        a.email,            # usamos el EMAIL como usuario_id
+        a.email,            
         a.fecha_iso,
         a.hora_iso,
         a.servicio,
@@ -41,13 +46,9 @@ def list_appointments(q: Optional[str] = None, limit: int = 50) -> List[Dict[str
     params = []
 
     if q:
-        # Intentar detectar si q es una fecha tipo dd/mm/yyyy o yyyy-mm-dd
         import re
         fecha_iso = None
-
-        # Caso dd/mm/yyyy o dd-mm-yyyy
         m1 = re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", q.strip())
-        # Caso yyyy-mm-dd
         m2 = re.match(r"(\d{4})-(\d{2})-(\d{2})", q.strip())
 
         if m1:
@@ -58,7 +59,6 @@ def list_appointments(q: Optional[str] = None, limit: int = 50) -> List[Dict[str
             fecha_iso = f"{y}-{m}-{d}"
 
         if fecha_iso:
-            # Buscar también por fecha
             sql += " WHERE (tipo LIKE ? OR descripcion LIKE ? OR usuario_id LIKE ? OR fecha = ?)"
             wildcard = f"%{q}%"
             params = [wildcard, wildcard, wildcard, fecha_iso]
@@ -117,20 +117,34 @@ def update_appointment(usuario_id: str, id_cita: int, nueva_fecha: str, nueva_ho
         WHERE usuario_id = ? AND id_cita = ?
     """, (nueva_fecha, nueva_hora, usuario_id, id_cita))
 
-def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
+
+
+def procesar_pdf_rag(pdf_bytes: bytes, filename: str) -> bool:
     """
-    Recibe el contenido de un PDF en bytes y devuelve el texto extraído.
-    Esta función NO depende de Streamlit.
+    Guarda el PDF en la memoria vectorial usando Ollama.
     """
-    import io
-
-    pdf_file = io.BytesIO(pdf_bytes)
-    reader = PdfReader(pdf_file)
-
-    text_parts = []
-    for page in reader.pages:
-        page_text = page.extract_text() or ""
-        text_parts.append(page_text)
-
-    return "\n".join(text_parts)
-
+    temp_path = f"temp_{filename}"
+    with open(temp_path, "wb") as f:
+        f.write(pdf_bytes)
+        
+    try:
+        loader = PyPDFLoader(temp_path)
+        documentos = loader.load()
+        
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        chunks = text_splitter.split_documents(documentos)
+        
+        embeddings = OllamaEmbeddings(model="llama3.2:1b")
+        
+        Chroma.from_documents(
+            documents=chunks, 
+            embedding=embeddings, 
+            persist_directory=DB_VECTOR_PATH
+        )
+        return True
+    except Exception as e:
+        print(f"Error en RAG: {e}")
+        return False
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
