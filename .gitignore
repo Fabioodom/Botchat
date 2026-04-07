@@ -75,3 +75,6 @@ local_settings.py
 credentials.json
 *.pkl
 token.json
+
+# Chroma Bases Vectoriales
+chroma_db_data

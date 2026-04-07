@@ -161,3 +161,13 @@ def update_appointment(usuario_id: str, id_cita: int, nueva_fecha: str, nueva_ho
 def delete_appointment_by_id(id_cita: int):
     """Elimina una cita por el ID."""
     execute_query("DELETE FROM citas WHERE id_cita = ?", (id_cita,))
+
+
+def get_all_appointments():
+    """Devuelve absolutamente todas las citas del sistema para el Admin."""
+    return query_all("SELECT * FROM citas ORDER BY fecha DESC, hora DESC")
+
+
+def get_all_users():
+    """Devuelve todos los usuarios registrados."""
+    return query_all("SELECT * FROM usuarios")
