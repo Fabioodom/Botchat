@@ -64,7 +64,7 @@ def ejecutar_agentes_cita(mensaje_usuario: str, email_usuario: str) -> str:
         - Si es agendar: usa agendar_cita_tool (email: {email_usuario}).
         - Si es eliminar: usa eliminar_cita_tool (PASA EL email: {email_usuario} Y EL servicio).
         - Si es modificar: usa modificar_cita_tool (PASA EL email: {email_usuario}).
-        - Si es consultar agenda: usa consultar_calendario_tool.
+        - Si es consultar agenda: usa consultar_calendario_tool (PASA EL email: {email_usuario}).
         - Si es sobre el PDF: usa consultar_pdf_tool. Lee la información devuelta y responde SOLO a la pregunta específica del usuario de forma natural, directa y conversacional.''',
         expected_output='Respuesta final amigable para el usuario. Si es una consulta de PDF, sintetiza la respuesta basándote en el documento.',
         agent=gestor

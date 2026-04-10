@@ -29,6 +29,7 @@ from backend.google_calendar import (
 from models.appointment import Appointment
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
 
 load_dotenv(find_dotenv())
 init_db()
@@ -74,21 +75,18 @@ if "calendar_timestamp" not in st.session_state:
 with st.sidebar:
     st.subheader("🔑 Mi Cuenta")
     
-    # Recuperar de la cookie si está vacía en session_state
     if not st.session_state.get("user_email"):
         email_en_cookie = st.session_state.cookies.get("user_email")
         if email_en_cookie:
             st.session_state.user_email = email_en_cookie
 
-    # Recuperar token de la base de datos
+    # Recuperar token de la base de datos (AHORA EN FORMATO JSON OFICIAL)
     if st.session_state.get("user_email") and not st.session_state.get("creds"):
         user = get_user_by_email(st.session_state.user_email)
         if user and user.get("token_path") and os.path.exists(user["token_path"]):
-            with open(user["token_path"], "rb") as f:
-                st.session_state.creds = pickle.load(f)
-                st.session_state.token_path = user["token_path"]
-                st.session_state.usuario_id = st.session_state.user_email
-                os.environ["CURRENT_USER_EMAIL"] = st.session_state.user_email
+            st.session_state.creds = Credentials.from_authorized_user_file(user["token_path"], SCOPES)
+            st.session_state.token_path = user["token_path"]
+            st.session_state.usuario_id = st.session_state.user_email
 
     if not st.session_state.get("user_email"):
         if st.button("🔌 Conectar Google Calendar", use_container_width=True):
@@ -97,19 +95,24 @@ with st.sidebar:
                 creds = flow.run_local_server(port=0)
                 oauth = build("oauth2", "v2", credentials=creds)
                 user_info = oauth.userinfo().get().execute()
+                
                 email = user_info.get("email")
                 nombre = user_info.get("name", "Usuario")
                 usuario_id = email
-                token_path = f"tokens/{email.replace('@', '_at_')}.pkl"
-                with open(token_path, "wb") as f:
-                    pickle.dump(creds, f)
+                
+                # GUARDAMOS EN .JSON
+                token_path = f"tokens/{email.replace('@', '_at_')}.json"
+                with open(token_path, "w", encoding="utf-8") as f:
+                    f.write(creds.to_json())
+                    
                 upsert_user_token(usuario_id, nombre, email, token_path)
+                
                 st.session_state.creds = creds
                 st.session_state.user_email = email
                 st.session_state.user_name = nombre
                 st.session_state.token_path = token_path
                 st.session_state.usuario_id = usuario_id
-                os.environ["CURRENT_USER_EMAIL"] = email
+                
                 st.session_state.cookies["user_email"] = email
                 st.session_state.cookies.save()
                 st.success(f"✅ Hola, {nombre}")
@@ -127,10 +130,8 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 2. RAG: MEMORIA DE DOCUMENTOS
     st.subheader("📚 Normativas (RAG)")
     uploaded_pdf = st.file_uploader("Sube requisitos en PDF", type=["pdf"], label_visibility="collapsed")
-
     if uploaded_pdf is not None:
         if st.session_state.get("pdf_filename") != uploaded_pdf.name:
             with st.spinner("Memorizando..."):
@@ -145,7 +146,6 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # 3. CONFIGURACIÓN IA (Oculta en Expander)
     with st.expander("⚙️ Configuración IA"):
         provider = st.radio("Proveedor", ["Groq (cloud)", "Ollama (local)"], index=0)
         if provider.startswith("Ollama"):
@@ -154,15 +154,13 @@ with st.sidebar:
                 lines = result.stdout.strip().split("\n")[1:]
                 modelos_locales = [line.split()[0] for line in lines if line.strip()]
                 model_name = st.selectbox("Modelo local", modelos_locales if modelos_locales else ["⚠️ Sin modelos"])
-                if st.button("🔄 Refrescar"):
-                    st.rerun()
+                if st.button("🔄 Refrescar"): st.rerun()
             except:
                 model_name = st.text_input("Modelo Ollama", value="llama3.2:1b")
         else:
             model_name = st.text_input("Modelo Groq", value="llama-3.3-70b-versatile")
             api_key = st.text_input("API KEY", type="password", value=os.getenv("GROQ_API_KEY", ""))
 
-    # 4. MODO ADMINISTRADOR (Oculta en Expander)
     with st.expander("🛡️ Acceso Admin"):
         modo_admin = st.toggle("Activar Dashboard")
         if modo_admin:
@@ -178,7 +176,6 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 5. BOTÓN DE REINICIO
     if st.button("🧹 Limpiar Chat", use_container_width=True):
         st.session_state.local_chat_history = []
         st.session_state.system_messages = []

@@ -118,7 +118,6 @@ def update_appointment(usuario_id: str, id_cita: int, nueva_fecha: str, nueva_ho
     """, (nueva_fecha, nueva_hora, usuario_id, id_cita))
 
 
-
 def procesar_pdf_rag(pdf_bytes: bytes, filename: str) -> bool:
     """
     Guarda el PDF en la memoria vectorial usando Ollama.
