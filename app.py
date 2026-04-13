@@ -306,30 +306,4 @@ else:
         else:
             st.info("Inicia sesión para ver tu calendario.")
         
-<<<<<<< HEAD
         st.markdown("---")
-=======
-        st.rerun()
-
-
-with right:
-
-
-    st.markdown("---")
-    st.header("📅 Tu Google Calendar")
-
-    if st.session_state.get("creds") and st.session_state.get("user_email"):
-        try:
-            calendar_email = st.session_state.user_email
-            url = f"https://calendar.google.com/calendar/embed?src={calendar_email}&ctz=Europe/Madrid"
-            st.components.v1.html(
-                f'<iframe src="{url}" style="border:0; width:100%; height:600px;" frameborder="0"></iframe>',
-                height=600
-            )
-        except Exception as e:
-            st.warning(f"No se pudo cargar calendario: {e}")
-    else:
-        st.info("Inicia sesión para ver tu calendario.")
-
-    st.markdown("---")
->>>>>>> 3207ebdb4b72dfa6330b1119406831e1752bc9d0
